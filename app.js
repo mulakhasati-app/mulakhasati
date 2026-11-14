@@ -126,7 +126,7 @@ document.addEventListener('keyup', e => {
 
 /* ---------- المسارات ---------- */
 const routes = {
-  '': pageWelcome, stage: pageStage, level: pageLevel, subject: pageSubject,
+  '': pageWelcome, stage: pageStage, level: pageLevel, subject: pageSubject, field: pageField,
   lesson: pageLesson, quiz: pageQuiz, me: pageMe, login: pageAuth,
   admin: (...a) => window.pageAdmin(...a)
 };
@@ -274,22 +274,57 @@ function plansView(plans, selectable) {
       <span class="price">${money(p.price)}</span></label>`).join('')}</div>`;
 }
 
-/* ---------- المادة والدروس ---------- */
+/* ---------- المادة ← المجالات ← الدروس ---------- */
+const fieldIcon = '📂';
+
 async function pageSubject(id) {
   const sj = await q(sb.from('subjects').select('*, levels(id,name)').eq('id', id).single());
-  const lessons = (await q(sb.from('lessons').select('id,title,hidden,sort').eq('subject_id', id).order('sort').order('created_at'))).filter(l => !l.hidden);
+  const [fields, loose] = await Promise.all([
+    q(sb.from('fields').select('id,name,hidden,sort').eq('subject_id', id).order('sort').order('name')),
+    q(sb.from('lessons').select('id,title,hidden,sort').eq('subject_id', id).is('field_id', null).order('sort').order('created_at'))
+  ]);
+  const vf = fields.filter(f => !f.hidden);
+  const vl = loose.filter(l => !l.hidden);
+  // عدد الدروس الظاهرة في كل مجال
+  const counts = {};
+  if (vf.length) {
+    const ls = await q(sb.from('lessons').select('id,field_id,hidden').in('field_id', vf.map(f => f.id)));
+    ls.filter(l => !l.hidden).forEach(l => { counts[l.field_id] = (counts[l.field_id] || 0) + 1; });
+  }
+  $app.innerHTML = `
+    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › ${esc(sj.name)}</div>
+    <h1>${subjIcon(sj.name)} ${esc(sj.name)}</h1>
+    ${vf.length ? `<h2>اختر المجال</h2><div class="list">${vf.map(f => `
+      <a class="row" href="#/field/${f.id}"><span class="num">${fieldIcon}</span><span class="grow">${esc(f.name)}</span>
+      <span class="badge b-gray">${lessonCount(counts[f.id] || 0)}</span></a>`).join('')}</div>` : ''}
+    ${vl.length ? `<h2>دروس أخرى</h2>${lessonRows(vl, {})}` : ''}
+    ${!vf.length && !vl.length ? '<div class="notice n-info">لا توجد مجالات في هذه المادة بعد.</div>' : ''}`;
+}
+
+function lessonCount(n) {
+  return n === 0 ? 'لا دروس' : n === 1 ? 'درس واحد' : n === 2 ? 'درسان' : n <= 10 ? n + ' دروس' : n + ' درساً';
+}
+
+function lessonRows(lessons, best) {
+  return `<div class="list">${lessons.map((l, i) => `
+    <a class="row" href="#/lesson/${l.id}"><span class="num">${i + 1}</span><span class="grow">${esc(l.title)}</span>
+    ${best[l.id] != null ? `<span class="badge b-green">${best[l.id]}%</span>` : ''}</a>`).join('')}</div>`;
+}
+
+async function pageField(id) {
+  const fd = await q(sb.from('fields').select('*, subjects(id,name,levels(id,name))').eq('id', id).single());
+  const lessons = (await q(sb.from('lessons').select('id,title,hidden,sort').eq('field_id', id).order('sort').order('created_at'))).filter(l => !l.hidden);
   let best = {};
   if (lessons.length && S.user) {
     const rs = await q(sb.from('results').select('lesson_id,score_pct').eq('user_id', S.user.id).in('lesson_id', lessons.map(l => l.id)));
     rs.forEach(r => { best[r.lesson_id] = Math.max(best[r.lesson_id] ?? 0, r.score_pct); });
   }
+  const sj = fd.subjects;
   $app.innerHTML = `
-    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › ${esc(sj.name)}</div>
-    <h1>${subjIcon(sj.name)} ${esc(sj.name)}</h1>
-    ${lessons.length ? `<div class="list">${lessons.map((l, i) => `
-      <a class="row" href="#/lesson/${l.id}"><span class="num">${i + 1}</span><span class="grow">${esc(l.title)}</span>
-      ${best[l.id] != null ? `<span class="badge b-green">${best[l.id]}%</span>` : ''}</a>`).join('')}</div>`
-      : '<div class="notice n-info">لا توجد دروس في هذه المادة بعد.</div>'}`;
+    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › <a href="#/subject/${sj.id}">${esc(sj.name)}</a> › ${esc(fd.name)}</div>
+    <h1>${fieldIcon} ${esc(fd.name)}</h1>
+    ${lessons.length ? lessonRows(lessons, best) : '<div class="notice n-info">لا توجد دروس في هذا المجال بعد.</div>'}
+    <a class="btn btn-line btn-block" style="margin-top:14px" href="#/subject/${sj.id}">الرجوع إلى المجالات</a>`;
 }
 
 function fmtSummary(t) {
@@ -305,19 +340,20 @@ function fmtSummary(t) {
 }
 
 async function pageLesson(id) {
-  const ls = await q(sb.from('lessons').select('*, subjects(id,name,level_id)').eq('id', id).single());
+  const ls = await q(sb.from('lessons').select('*, subjects(id,name,level_id), fields(id,name)').eq('id', id).single());
+  const backHref = ls.fields ? `#/field/${ls.fields.id}` : `#/subject/${ls.subjects.id}`;
   let img = '';
   if (ls.image_path) {
     try { img = `<img class="lesson-img" draggable="false" alt="" src="${await privateImage('lesson-images', ls.image_path)}">`; }
     catch (e) { console.warn(e); }
   }
   $app.innerHTML = `
-    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${ls.subjects.level_id}">المواد</a> › <a href="#/subject/${ls.subjects.id}">${esc(ls.subjects.name)}</a></div>
+    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${ls.subjects.level_id}">المواد</a> › <a href="#/subject/${ls.subjects.id}">${esc(ls.subjects.name)}</a>${ls.fields ? ` › <a href="${backHref}">${esc(ls.fields.name)}</a>` : ''}</div>
     <h1>${esc(ls.title)}</h1>
     ${img}
     <div class="summary">${fmtSummary(ls.summary)}</div>
     <a class="btn btn-block" style="margin-top:16px" href="#/quiz/${ls.id}">📝 اختبر نفسك</a>
-    <a class="btn btn-line btn-block" style="margin-top:10px" href="#/subject/${ls.subjects.id}">الرجوع إلى الدروس</a>`;
+    <a class="btn btn-line btn-block" style="margin-top:10px" href="${backHref}">الرجوع إلى الدروس</a>`;
 }
 
 /* ---------- الاختبار QCM ---------- */

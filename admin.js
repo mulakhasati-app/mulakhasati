@@ -4,7 +4,7 @@
    تعتمد على الأدوات المعرّفة في app.js (sb, q, esc, toast ...)
    ===================================================================== */
 
-const ADM = { stage: null, level: null, subject: null, lesson: null };
+const ADM = { stage: null, level: null, subject: null, field: null, lesson: null };
 let payFilter = 'pending';
 const admCache = {};
 
@@ -154,10 +154,12 @@ const ENT = {
     fields: [{ k: 'name', l: 'اسم المادة', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
   plans: { table: 'plans', single: 'اشتراك', parent: 'level_id', label: r => `${r.name} — ${money(r.price)} / ${durLabel(r.duration_days)}`,
     fields: [{ k: 'name', l: 'اسم الاشتراك (مثال: اشتراك شهري)', t: 'text' }, { k: 'price', l: 'السعر', t: 'number' }, { k: 'duration_days', l: 'المدة بالأيام (30 = شهر، 270 = سنة دراسية)', t: 'number' }] },
-  lessons: { table: 'lessons', single: 'درس', parent: 'subject_id', label: r => r.title,
+  fields: { table: 'fields', single: 'مجال', parent: 'subject_id', label: r => r.name,
+    fields: [{ k: 'name', l: 'اسم المجال (مثال: القرآن الكريم وتفسيره)', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
+  lessons: { table: 'lessons', single: 'درس', parent: 'field_id', label: r => r.title,
     fields: [{ k: 'title', l: 'عنوان الدرس', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] }
 };
-const parentId = key => ({ levels: ADM.stage, subjects: ADM.level, plans: ADM.level, lessons: ADM.subject }[key] || {}).id;
+const parentId = key => ({ levels: ADM.stage, subjects: ADM.level, plans: ADM.level, fields: ADM.subject, lessons: ADM.field }[key] || {}).id;
 
 function entSection(key, title, rows, canOpen) {
   admCache[key] = Object.fromEntries(rows.map(r => [r.id, r]));
@@ -179,6 +181,7 @@ async function admContent(box) {
   if (A.stage) crumbs.push(`<a href="#" data-act="nav" data-to="1">${esc(A.stage.name)}</a>`);
   if (A.level) crumbs.push(`<a href="#" data-act="nav" data-to="2">${esc(A.level.name)}</a>`);
   if (A.subject) crumbs.push(`<a href="#" data-act="nav" data-to="3">${esc(A.subject.name)}</a>`);
+  if (A.field) crumbs.push(`<a href="#" data-act="nav" data-to="4">${esc(A.field.name)}</a>`);
   if (A.lesson) crumbs.push(esc(A.lesson.name));
   let html = `<div class="crumbs">${crumbs.join(' › ')}</div>`;
 
@@ -193,7 +196,8 @@ async function admContent(box) {
     const [subs, plans] = await Promise.all([get('subjects', 'level_id', A.level.id), get('plans', 'level_id', A.level.id)]);
     html += entSection('subjects', `مواد «${esc(A.level.name)}»`, subs, true);
     html += entSection('plans', 'أسعار الاشتراك لهذا المستوى', plans, false);
-  } else html += entSection('lessons', `دروس «${esc(A.subject.name)}»`, await get('lessons', 'subject_id', A.subject.id), true);
+  } else if (!A.field) html += entSection('fields', `مجالات «${esc(A.subject.name)}»`, await get('fields', 'subject_id', A.subject.id), true);
+  else html += entSection('lessons', `دروس «${esc(A.field.name)}»`, await get('lessons', 'field_id', A.field.id), true);
   box.innerHTML = html;
 }
 
@@ -206,6 +210,7 @@ async function admContentClick(e, box) {
     if (to <= 0) ADM.stage = null;
     if (to <= 1) ADM.level = null;
     if (to <= 2) ADM.subject = null;
+    if (to <= 3) ADM.field = null;
     ADM.lesson = null;
     return admContent(box);
   }
@@ -215,6 +220,7 @@ async function admContentClick(e, box) {
     if (ent === 'stages') ADM.stage = { id, name };
     if (ent === 'levels') ADM.level = { id, name };
     if (ent === 'subjects') ADM.subject = { id, name };
+    if (ent === 'fields') ADM.field = { id, name };
     if (ent === 'lessons') ADM.lesson = { id, name };
     return admContent(box);
   }
@@ -227,6 +233,11 @@ async function admContentClick(e, box) {
   if (act === 'del') {
     if (!confirm(`حذف «${ENT[ent].label(row)}» نهائياً مع كل ما بداخله؟ (للإخفاء المؤقت استخدم «سحب»)`)) return;
     if (ent === 'lessons' && row.image_path) await sb.storage.from('lesson-images').remove([row.image_path]);
+    if (ent === 'fields') {
+      const ls = await q(sb.from('lessons').select('image_path').eq('field_id', id));
+      const paths = ls.map(l => l.image_path).filter(Boolean);
+      if (paths.length) await sb.storage.from('lesson-images').remove(paths);
+    }
     const { error } = await sb.from(ENT[ent].table).delete().eq('id', id);
     if (error) return toast('خطأ: ' + error.message);
     toast('تم الحذف'); return admContent(box);
@@ -251,7 +262,8 @@ function entityForm(key, row, box) {
     if (key === 'plans' && (!(vals.duration_days >= 1) || !(vals.price >= 0))) return toast('تحقق من السعر والمدة');
     let res;
     if (row) res = await sb.from(E.table).update(vals).eq('id', row.id);
-    else res = await sb.from(E.table).insert(E.parent ? { ...vals, [E.parent]: parentId(key) } : vals).select().single();
+    else res = await sb.from(E.table).insert(E.parent
+      ? { ...vals, [E.parent]: parentId(key), ...(key === 'lessons' ? { subject_id: ADM.subject.id } : {}) } : vals).select().single();
     if (res.error) return toast('خطأ: ' + res.error.message);
     closeModal(); toast('تم الحفظ ✔');
     if (!row && key === 'lessons') ADM.lesson = { id: res.data.id, name: res.data.title };
@@ -265,6 +277,7 @@ async function lessonEditor(box, lessonId, crumbHtml) {
     q(sb.from('lessons').select('*').eq('id', lessonId).single()),
     q(sb.from('questions').select('*').eq('lesson_id', lessonId).order('sort').order('id'))
   ]);
+  const sameSubjectFields = await q(sb.from('fields').select('id,name').eq('subject_id', ls.subject_id).order('sort').order('name'));
   let questions = qs.map(x => ({ question: x.question, options: [...(x.options || [])], correct: x.correct_index }));
   let imgUrl = '';
   if (ls.image_path) { try { imgUrl = await privateImage('lesson-images', ls.image_path, 600); } catch (e) { /* ignore */ } }
@@ -276,6 +289,8 @@ async function lessonEditor(box, lessonId, crumbHtml) {
       <label>الملخص</label>
       <textarea id="l_sum" style="min-height:220px">${esc(ls.summary)}</textarea>
       <div class="small muted">للتنسيق: سطر يبدأ بـ «# » عنوان فرعي، وسطر يبدأ بـ «- » نقطة في قائمة، وبقية الأسطر فقرات.</div>
+      <label>المجال</label>
+      <select id="l_field">${sameSubjectFields.map(f => `<option value="${f.id}" ${f.id === ls.field_id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select>
       <label>الترتيب</label><input type="number" id="l_sort" value="${ls.sort}">
       <label><input type="checkbox" id="l_hid" ${ls.hidden ? 'checked' : ''}> مخفي عن المشتركين (سحب الدرس)</label>
       <label>الصورة التعبيرية</label>
@@ -366,7 +381,8 @@ async function lessonEditor(box, lessonId, crumbHtml) {
       }
       const u = await sb.from('lessons').update({
         title, summary: $('#l_sum', box).value, sort: Number($('#l_sort', box).value) || 0,
-        hidden: $('#l_hid', box).checked, image_path
+        hidden: $('#l_hid', box).checked, image_path,
+        field_id: $('#l_field', box).value || ls.field_id
       }).eq('id', lessonId);
       if (u.error) throw u.error;
 
@@ -375,6 +391,8 @@ async function lessonEditor(box, lessonId, crumbHtml) {
       if (clean.length) { const i = await sb.from('questions').insert(clean); if (i.error) throw i.error; }
 
       ADM.lesson.name = title;
+      const nf = sameSubjectFields.find(f => f.id === $('#l_field', box).value);
+      if (nf) ADM.field = { id: nf.id, name: nf.name };       // يبقى المدير داخل المجال الجديد إن نقل الدرس
       toast('تم حفظ الدرس ✔');
       admContent(box);               // إعادة تحميل المحرر بالقيم المحفوظة
     } catch (err) {
