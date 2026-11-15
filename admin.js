@@ -4,7 +4,7 @@
    تعتمد على الأدوات المعرّفة في app.js (sb, q, esc, toast ...)
    ===================================================================== */
 
-const ADM = { stage: null, level: null, subject: null, field: null, lesson: null };
+const ADM = { stage: null, level: null, subject: null, field: null, exam: null, lesson: null };
 let payFilter = 'pending';
 const admCache = {};
 
@@ -156,10 +156,12 @@ const ENT = {
     fields: [{ k: 'name', l: 'اسم الاشتراك (مثال: اشتراك شهري)', t: 'text' }, { k: 'price', l: 'السعر', t: 'number' }, { k: 'duration_days', l: 'المدة بالأيام (30 = شهر، 270 = سنة دراسية)', t: 'number' }] },
   fields: { table: 'fields', single: 'مجال', parent: 'subject_id', label: r => r.name,
     fields: [{ k: 'name', l: 'اسم المجال (مثال: القرآن الكريم وتفسيره)', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
+  exams: { table: 'exams', single: 'اختبار', parent: 'subject_id', label: r => r.title,
+    fields: [{ k: 'title', l: 'عنوان الاختبار (مثال: اختبار الفصل الأول)', t: 'text' }, { k: 'description', l: 'وصف قصير (اختياري)', t: 'text', opt: true }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
   lessons: { table: 'lessons', single: 'درس', parent: 'field_id', label: r => r.title,
     fields: [{ k: 'title', l: 'عنوان الدرس', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] }
 };
-const parentId = key => ({ levels: ADM.stage, subjects: ADM.level, plans: ADM.level, fields: ADM.subject, lessons: ADM.field }[key] || {}).id;
+const parentId = key => ({ levels: ADM.stage, subjects: ADM.level, plans: ADM.level, fields: ADM.subject, exams: ADM.subject, lessons: ADM.field }[key] || {}).id;
 
 function entSection(key, title, rows, canOpen) {
   admCache[key] = Object.fromEntries(rows.map(r => [r.id, r]));
@@ -182,21 +184,27 @@ async function admContent(box) {
   if (A.level) crumbs.push(`<a href="#" data-act="nav" data-to="2">${esc(A.level.name)}</a>`);
   if (A.subject) crumbs.push(`<a href="#" data-act="nav" data-to="3">${esc(A.subject.name)}</a>`);
   if (A.field) crumbs.push(`<a href="#" data-act="nav" data-to="4">${esc(A.field.name)}</a>`);
+  if (A.exam) crumbs.push(`<a href="#" data-act="nav" data-to="4">${esc(A.exam.name)}</a>`);
   if (A.lesson) crumbs.push(esc(A.lesson.name));
   let html = `<div class="crumbs">${crumbs.join(' › ')}</div>`;
 
   box.onclick = e => admContentClick(e, box);
 
   if (A.lesson) { box.innerHTML = html; return lessonEditor(box, A.lesson.id, html); }
+  if (A.exam) { box.innerHTML = html; return examEditor(box, A.exam.id, html); }
 
-  const get = (t, col, id) => q(sb.from(t).select('*').eq(col, id).order(t === 'plans' ? 'price' : 'sort').order(t === 'lessons' ? 'created_at' : 'id'));
+  const get = (t, col, id) => q(sb.from(t).select('*').eq(col, id).order(t === 'plans' ? 'price' : 'sort').order((t === 'lessons' || t === 'exams') ? 'created_at' : 'id'));
   if (!A.stage) html += entSection('stages', 'المراحل الدراسية', await q(sb.from('stages').select('*').order('sort').order('name')), true);
   else if (!A.level) html += entSection('levels', `مستويات «${esc(A.stage.name)}»`, await get('levels', 'stage_id', A.stage.id), true);
   else if (!A.subject) {
     const [subs, plans] = await Promise.all([get('subjects', 'level_id', A.level.id), get('plans', 'level_id', A.level.id)]);
     html += entSection('subjects', `مواد «${esc(A.level.name)}»`, subs, true);
     html += entSection('plans', 'أسعار الاشتراك لهذا المستوى', plans, false);
-  } else if (!A.field) html += entSection('fields', `مجالات «${esc(A.subject.name)}»`, await get('fields', 'subject_id', A.subject.id), true);
+  } else if (!A.field) {
+    const [fds, exs] = await Promise.all([get('fields', 'subject_id', A.subject.id), get('exams', 'subject_id', A.subject.id)]);
+    html += entSection('fields', `مجالات «${esc(A.subject.name)}»`, fds, true);
+    html += entSection('exams', `اختبارات «${esc(A.subject.name)}»`, exs, true);
+  }
   else html += entSection('lessons', `دروس «${esc(A.field.name)}»`, await get('lessons', 'field_id', A.field.id), true);
   box.innerHTML = html;
 }
@@ -211,6 +219,7 @@ async function admContentClick(e, box) {
     if (to <= 1) ADM.level = null;
     if (to <= 2) ADM.subject = null;
     if (to <= 3) ADM.field = null;
+    ADM.exam = null;
     ADM.lesson = null;
     return admContent(box);
   }
@@ -221,6 +230,7 @@ async function admContentClick(e, box) {
     if (ent === 'levels') ADM.level = { id, name };
     if (ent === 'subjects') ADM.subject = { id, name };
     if (ent === 'fields') ADM.field = { id, name };
+    if (ent === 'exams') ADM.exam = { id, name };
     if (ent === 'lessons') ADM.lesson = { id, name };
     return admContent(box);
   }
@@ -238,6 +248,11 @@ async function admContentClick(e, box) {
       const paths = ls.map(l => l.image_path).filter(Boolean);
       if (paths.length) await sb.storage.from('lesson-images').remove(paths);
     }
+    if (ent === 'subjects') {
+      const ls = await q(sb.from('lessons').select('image_path').eq('subject_id', id));
+      const paths = ls.map(l => l.image_path).filter(Boolean);
+      if (paths.length) await sb.storage.from('lesson-images').remove(paths);
+    }
     const { error } = await sb.from(ENT[ent].table).delete().eq('id', id);
     if (error) return toast('خطأ: ' + error.message);
     toast('تم الحذف'); return admContent(box);
@@ -250,7 +265,7 @@ function entityForm(key, row, box) {
   const defs = { sort: count + 1, price: 0, duration_days: 30 };
   const m = openModal(`<h2 style="margin-top:0">${row ? 'تعديل' : 'إضافة'} ${E.single}</h2>
     <form id="ef">${E.fields.map(f => `<label>${f.l}</label>
-      <input type="${f.t}" id="f_${f.k}" ${f.t === 'number' ? 'step="any"' : ''} value="${esc(row ? row[f.k] : (defs[f.k] ?? ''))}" required>`).join('')}
+      <input type="${f.t}" id="f_${f.k}" ${f.t === 'number' ? 'step="any"' : ''} value="${esc(row ? row[f.k] : (defs[f.k] ?? ''))}" ${f.opt ? '' : 'required'}>`).join('')}
     <button class="btn-block" style="margin-top:14px">حفظ</button></form>`);
   $('#ef', m).onsubmit = async ev => {
     ev.preventDefault();
@@ -267,7 +282,145 @@ function entityForm(key, row, box) {
     if (res.error) return toast('خطأ: ' + res.error.message);
     closeModal(); toast('تم الحفظ ✔');
     if (!row && key === 'lessons') ADM.lesson = { id: res.data.id, name: res.data.title };
+    if (!row && key === 'exams') ADM.exam = { id: res.data.id, name: res.data.title };
     admContent(box);
+  };
+}
+
+
+/* ---------- محرر أسئلة QCM المشترك (الدروس والاختبارات) ---------- */
+function mountQcm(box, questions) {
+  const ql = $('#qlist', box);
+  const renderQs = () => {
+    ql.innerHTML = questions.length ? questions.map((x, i) => `<div class="qedit" data-i="${i}">
+      <label style="margin-top:0">السؤال ${i + 1}</label>
+      <input type="text" data-f="question" value="${esc(x.question)}" placeholder="نص السؤال">
+      ${x.options.map((o, j) => `<div class="oprow">
+        <input type="radio" name="c${i}" data-f="correct" data-j="${j}" ${x.correct === j ? 'checked' : ''}>
+        <input type="text" data-f="opt" data-j="${j}" value="${esc(o)}" placeholder="الخيار ${j + 1}">
+        <button type="button" class="btn-sm btn-red" data-rmopt="${j}">×</button></div>`).join('')}
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button type="button" class="btn-sm btn-light" data-addopt>+ خيار</button>
+        <button type="button" class="btn-sm btn-red" data-rmq>حذف السؤال</button></div></div>`).join('')
+      : '<div class="notice n-info">لا توجد أسئلة بعد. اضغط «+ سؤال».</div>';
+  };
+  renderQs();
+  const blank = () => ({ question: '', options: ['', '', '', ''], correct: 0 });
+  $('#addq', box).onclick = () => { questions.push(blank()); renderQs(); };
+  ql.addEventListener('input', e => {
+    const card = e.target.closest('.qedit'); if (!card) return;
+    const x = questions[+card.dataset.i], f = e.target.dataset.f;
+    if (f === 'question') x.question = e.target.value;
+    if (f === 'opt') x.options[+e.target.dataset.j] = e.target.value;
+    if (f === 'correct') x.correct = +e.target.dataset.j;
+  });
+  ql.addEventListener('click', e => {
+    const card = e.target.closest('.qedit'); if (!card) return;
+    const i = +card.dataset.i, x = questions[i];
+    if (e.target.closest('[data-rmq]')) { questions.splice(i, 1); renderQs(); }
+    else if (e.target.closest('[data-addopt]')) { x.options.push(''); renderQs(); }
+    else if (e.target.closest('[data-rmopt]')) {
+      const j = +e.target.closest('[data-rmopt]').dataset.rmopt;
+      if (x.options.length <= 2) return toast('يلزم خياران على الأقل');
+      x.options.splice(j, 1);
+      if (x.correct === j) x.correct = 0; else if (x.correct > j) x.correct--;
+      renderQs();
+    }
+  });
+  return { render: renderQs };
+}
+
+// تنظيف الأسئلة وإعادة حساب موضع الإجابة الصحيحة؛ يرجع null مع رسالة عند وجود خطأ
+function cleanQs(questions, parentKey, parentVal) {
+  const clean = [];
+  for (let i = 0; i < questions.length; i++) {
+    const x = questions[i];
+    if (!x.question.trim() && x.options.every(o => !o.trim())) continue;   // سؤال فارغ تماماً
+    if (!x.question.trim()) { toast(`السؤال ${i + 1}: اكتب نص السؤال`); return null; }
+    const opts = []; let corr = -1;
+    x.options.forEach((o, j) => { if (o.trim()) { if (j === x.correct) corr = opts.length; opts.push(o.trim()); } });
+    if (opts.length < 2) { toast(`السؤال ${i + 1}: يلزم خياران على الأقل`); return null; }
+    if (corr < 0) { toast(`السؤال ${i + 1}: حدّد إجابة صحيحة غير فارغة`); return null; }
+    clean.push({ [parentKey]: parentVal, question: x.question.trim(), options: opts, correct_index: corr, sort: clean.length + 1 });
+  }
+  return clean;
+}
+
+/* ---------- محرر الاختبار + أسئلة QCM + استيراد من الدروس ---------- */
+async function examEditor(box, examId, crumbHtml) {
+  const [ex, qs] = await Promise.all([
+    q(sb.from('exams').select('*').eq('id', examId).single()),
+    q(sb.from('exam_questions').select('*').eq('exam_id', examId).order('sort').order('id'))
+  ]);
+  const questions = qs.map(x => ({ question: x.question, options: [...(x.options || [])], correct: x.correct_index }));
+  box.innerHTML = `${crumbHtml}
+    <h2 style="margin-top:6px">تحرير الاختبار</h2>
+    <div class="card" style="text-align:start">
+      <label>عنوان الاختبار</label><input type="text" id="x_title" value="${esc(ex.title)}">
+      <label>وصف قصير (اختياري)</label><input type="text" id="x_desc" value="${esc(ex.description)}">
+      <label>الترتيب</label><input type="number" id="x_sort" value="${ex.sort}">
+      <label><input type="checkbox" id="x_hid" ${ex.hidden ? 'checked' : ''}> مخفي عن المشتركين (سحب الاختبار)</label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2>أسئلة الاختبار (QCM)</h2>
+      <span><button class="btn-sm btn-light" type="button" id="impq">📥 من الدروس</button>
+      <button class="btn-sm" type="button" id="addq">+ سؤال</button></span></div>
+    <div class="small muted">اختر الدائرة بجانب الإجابة الصحيحة. «من الدروس» ينسخ أسئلة دروس هذه المادة إلى الاختبار (نسخة مستقلة، لا يتأثر الدرس).</div>
+    <div id="qlist"></div>
+    <button class="btn-block" id="savex" style="margin-top:14px">💾 حفظ الاختبار والأسئلة</button>
+    <button class="btn-line btn-block" id="backx" style="margin-top:10px">رجوع</button>`;
+  const qcm = mountQcm(box, questions);
+  $('#backx', box).onclick = () => { ADM.exam = null; admContent(box); };
+
+  $('#impq', box).onclick = async () => {
+    const lessons = await q(sb.from('lessons').select('id,title,sort,fields(name)').eq('subject_id', ex.subject_id).order('sort').order('created_at'));
+    if (!lessons.length) return toast('لا توجد دروس في هذه المادة');
+    const qrows = await q(sb.from('questions').select('*').in('lesson_id', lessons.map(l => l.id)).order('sort').order('id'));
+    const by = {}; qrows.forEach(r => (by[r.lesson_id] ||= []).push(r));
+    const withQ = lessons.filter(l => by[l.id]);
+    if (!withQ.length) return toast('لا توجد أسئلة في دروس هذه المادة بعد');
+    const m = openModal(`<h2 style="margin-top:0">استيراد أسئلة من الدروس</h2>
+      <div class="small muted">علّم الأسئلة المطلوبة ثم اضغط «إضافة». (نسخ مستقل)</div>
+      <div id="imp" style="max-height:55vh;overflow:auto;text-align:start">${withQ.map(l => `
+        <div class="card" style="margin:8px 0;padding:10px">
+          <label style="margin:0"><input type="checkbox" data-all="${l.id}"> <b>${esc(l.title)}</b> <span class="muted small">${l.fields ? '· ' + esc(l.fields.name) : ''}</span></label>
+          ${by[l.id].map(r => `<label style="display:block;margin:6px 0 0 0;font-weight:400"><input type="checkbox" data-q="${r.id}" data-l="${l.id}"> ${esc(r.question)}</label>`).join('')}
+        </div>`).join('')}</div>
+      <button class="btn-block" id="impgo" style="margin-top:12px">إضافة المحدد</button>`);
+    m.addEventListener('change', e => {
+      const a = e.target.dataset.all;
+      if (a) m.querySelectorAll(`[data-l="${a}"]`).forEach(c => { c.checked = e.target.checked; });
+    });
+    $('#impgo', m).onclick = () => {
+      const ids = new Set([...m.querySelectorAll('[data-q]:checked')].map(c => c.dataset.q));
+      if (!ids.size) return toast('لم تحدد أي سؤال');
+      qrows.filter(r => ids.has(r.id)).forEach(r => questions.push({ question: r.question, options: [...(r.options || [])], correct: r.correct_index }));
+      closeModal(); qcm.render(); toast(`أُضيف ${ids.size} سؤال — لا تنس الحفظ`);
+    };
+  };
+
+  $('#savex', box).onclick = async ev => {
+    const btn = ev.currentTarget;
+    const title = $('#x_title', box).value.trim();
+    if (!title) return toast('اكتب عنوان الاختبار');
+    const clean = cleanQs(questions, 'exam_id', examId);
+    if (!clean) return;
+    btn.disabled = true; btn.textContent = 'جارٍ الحفظ…';
+    try {
+      const u = await sb.from('exams').update({
+        title, description: $('#x_desc', box).value.trim(), sort: Number($('#x_sort', box).value) || 0,
+        hidden: $('#x_hid', box).checked
+      }).eq('id', examId);
+      if (u.error) throw u.error;
+      const d = await sb.from('exam_questions').delete().eq('exam_id', examId);
+      if (d.error) throw d.error;
+      if (clean.length) { const i = await sb.from('exam_questions').insert(clean); if (i.error) throw i.error; }
+      ADM.exam.name = title;
+      toast('تم حفظ الاختبار ✔');
+      admContent(box);
+    } catch (err) {
+      toast('تعذّر الحفظ: ' + (err.message || err));
+      btn.disabled = false; btn.textContent = '💾 حفظ الاختبار والأسئلة';
+    }
   };
 }
 
@@ -306,43 +459,7 @@ async function lessonEditor(box, lessonId, crumbHtml) {
     <button class="btn-block" id="savel" style="margin-top:14px">💾 حفظ الدرس والأسئلة</button>
     <button class="btn-line btn-block" id="backl" style="margin-top:10px">رجوع إلى قائمة الدروس</button>`;
 
-  const ql = $('#qlist', box);
-  const renderQs = () => {
-    ql.innerHTML = questions.length ? questions.map((x, i) => `<div class="qedit" data-i="${i}">
-      <label style="margin-top:0">السؤال ${i + 1}</label>
-      <input type="text" data-f="question" value="${esc(x.question)}" placeholder="نص السؤال">
-      ${x.options.map((o, j) => `<div class="oprow">
-        <input type="radio" name="c${i}" data-f="correct" data-j="${j}" ${x.correct === j ? 'checked' : ''}>
-        <input type="text" data-f="opt" data-j="${j}" value="${esc(o)}" placeholder="الخيار ${j + 1}">
-        <button type="button" class="btn-sm btn-red" data-rmopt="${j}">×</button></div>`).join('')}
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button type="button" class="btn-sm btn-light" data-addopt>+ خيار</button>
-        <button type="button" class="btn-sm btn-red" data-rmq>حذف السؤال</button></div></div>`).join('')
-      : '<div class="notice n-info">لا توجد أسئلة بعد. اضغط «+ سؤال».</div>';
-  };
-  renderQs();
-  const blank = () => ({ question: '', options: ['', '', '', ''], correct: 0 });
-  $('#addq', box).onclick = () => { questions.push(blank()); renderQs(); };
-  ql.addEventListener('input', e => {
-    const card = e.target.closest('.qedit'); if (!card) return;
-    const x = questions[+card.dataset.i], f = e.target.dataset.f;
-    if (f === 'question') x.question = e.target.value;
-    if (f === 'opt') x.options[+e.target.dataset.j] = e.target.value;
-    if (f === 'correct') x.correct = +e.target.dataset.j;
-  });
-  ql.addEventListener('click', e => {
-    const card = e.target.closest('.qedit'); if (!card) return;
-    const i = +card.dataset.i, x = questions[i];
-    if (e.target.closest('[data-rmq]')) { questions.splice(i, 1); renderQs(); }
-    else if (e.target.closest('[data-addopt]')) { x.options.push(''); renderQs(); }
-    else if (e.target.closest('[data-rmopt]')) {
-      const j = +e.target.closest('[data-rmopt]').dataset.rmopt;
-      if (x.options.length <= 2) return toast('يلزم خياران على الأقل');
-      x.options.splice(j, 1);
-      if (x.correct === j) x.correct = 0; else if (x.correct > j) x.correct--;
-      renderQs();
-    }
-  });
+  const qcm = mountQcm(box, questions);
   $('#backl', box).onclick = () => { ADM.lesson = null; admContent(box); };
 
   $('#savel', box).onclick = async ev => {
@@ -350,18 +467,8 @@ async function lessonEditor(box, lessonId, crumbHtml) {
     const title = $('#l_title', box).value.trim();
     if (!title) return toast('اكتب عنوان الدرس');
 
-    // تنظيف الأسئلة وإعادة حساب موضع الإجابة الصحيحة
-    const clean = [];
-    for (let i = 0; i < questions.length; i++) {
-      const x = questions[i];
-      if (!x.question.trim() && x.options.every(o => !o.trim())) continue;   // سؤال فارغ تماماً
-      if (!x.question.trim()) return toast(`السؤال ${i + 1}: اكتب نص السؤال`);
-      const opts = []; let corr = -1;
-      x.options.forEach((o, j) => { if (o.trim()) { if (j === x.correct) corr = opts.length; opts.push(o.trim()); } });
-      if (opts.length < 2) return toast(`السؤال ${i + 1}: يلزم خياران على الأقل`);
-      if (corr < 0) return toast(`السؤال ${i + 1}: حدّد إجابة صحيحة غير فارغة`);
-      clean.push({ lesson_id: lessonId, question: x.question.trim(), options: opts, correct_index: corr, sort: clean.length + 1 });
-    }
+    const clean = cleanQs(questions, 'lesson_id', lessonId);
+    if (!clean) return;
 
     btn.disabled = true; btn.textContent = 'جارٍ الحفظ…';
     try {
