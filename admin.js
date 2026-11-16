@@ -203,7 +203,9 @@ async function admContent(box) {
   } else if (!A.field) {
     const [fds, exs] = await Promise.all([get('fields', 'subject_id', A.subject.id), get('exams', 'subject_id', A.subject.id)]);
     html += entSection('fields', `مجالات «${esc(A.subject.name)}»`, fds, true);
+    html += `<button class="btn-light btn-block" data-act="packimp" style="margin-top:8px">📦 استيراد مجال كامل (دروس + أسئلة) بلصق واحد</button>`;
     html += entSection('exams', `اختبارات «${esc(A.subject.name)}»`, exs, true);
+    html += `<button class="btn-light btn-block" data-act="examimp" style="margin-top:8px">📦 استيراد اختبار كامل بلصق واحد</button>`;
   }
   else html += entSection('lessons', `دروس «${esc(A.field.name)}»`, await get('lessons', 'field_id', A.field.id), true);
   box.innerHTML = html;
@@ -223,6 +225,8 @@ async function admContentClick(e, box) {
     ADM.lesson = null;
     return admContent(box);
   }
+  if (act === 'packimp') return importPack(box);
+  if (act === 'examimp') return importExam(box);
   const row = id ? admCache[ent][id] : null;
   if (act === 'open') {
     const name = ENT[ent].label(row);
@@ -288,6 +292,179 @@ function entityForm(key, row, box) {
 }
 
 
+/* ---------- استيراد مجال كامل: دروس + ملخصات + أسئلة بلصق واحد ----------
+@@ المجال: اسم المجال
+=== الدرس: عنوان الدرس
+(ملخص الدرس... سطر يبدأ بـ «# » عنوان فرعي و«- » أو «• » نقطة)
+--- الأسئلة
+1. نص السؤال؟
+أ) ... ب) ... ج) ... د) ...   (كل خيار في سطر)
+الإجابة: ب                                                                    */
+function parsePack(text) {
+  const fields = []; let f = null, l = null, inQ = false;
+  const flush = () => { if (l) { l.summary = l.sumLines.join('\n').trim(); l.questions = parseQuestions(l.qLines.join('\n')); delete l.sumLines; delete l.qLines; f.lessons.push(l); l = null; } };
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.trim();
+    let m;
+    if ((m = line.match(/^@@\s*(?:المجال)?\s*[:：]?\s*(.+)$/))) { flush(); f = { name: m[1].trim(), lessons: [] }; fields.push(f); inQ = false; continue; }
+    if ((m = line.match(/^={2,}\s*(?:الدرس)?\s*[:：]?\s*(.+)$/))) {
+      flush(); if (!f) { f = { name: 'مجال جديد', lessons: [] }; fields.push(f); }
+      l = { title: m[1].trim(), sumLines: [], qLines: [] }; inQ = false; continue;
+    }
+    if (l && /^-{2,}\s*(الأسئلة|الاسئلة)/.test(line)) { inQ = true; continue; }
+    if (l) (inQ ? l.qLines : l.sumLines).push(raw);
+  }
+  flush();
+  return fields.filter(x => x.lessons.length);
+}
+
+/* @@ اختبار: العنوان   ثم (اختياري) وصف: ...   ثم الأسئلة بالصيغة المعتادة */
+function parseExams(text) {
+  const out = []; let e = null;
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.trim(); let m;
+    if ((m = line.match(/^@@\s*(?:الاختبار|اختبار)?\s*[:：]?\s*(.+)$/))) { e = { title: m[1].trim(), description: '', lines: [] }; out.push(e); continue; }
+    if (!e) continue;
+    if (!e.lines.length && (m = line.match(/^(?:وصف|الوصف)\s*[:：]\s*(.*)$/))) { e.description = m[1].trim(); continue; }
+    e.lines.push(raw);
+  }
+  return out.map(x => ({ title: x.title, description: x.description, questions: parseQuestions(x.lines.join('\n')) })).filter(x => x.questions.length);
+}
+
+async function importExam(box) {
+  const m = openModal(`<h2 style="margin-top:0">استيراد اختبار كامل</h2>
+    <div class="small muted">الصق الاختبار كما أرسلته لك. سيُنشأ داخل المادة «${esc(ADM.subject.name)}» بعنوانه وأسئلته وإجاباته.</div>
+    <textarea id="ie_t" style="min-height:220px;margin-top:8px" placeholder="@@ اختبار: عنوان الاختبار&#10;وصف: (اختياري)&#10;1. السؤال؟&#10;أ) ...&#10;ب) ...&#10;الإجابة: ب"></textarea>
+    <div id="ie_info" class="small muted" style="margin:6px 0"></div>
+    <button class="btn-block" id="ie_go">إنشاء الاختبار</button>`);
+  const t = $('#ie_t', m), info = $('#ie_info', m);
+  t.addEventListener('input', () => {
+    const p = parseExams(t.value);
+    info.textContent = p.length ? `تم التعرف على ${p.length} اختبار، ${p.reduce((a, x) => a + x.questions.length, 0)} سؤال` : '';
+  });
+  $('#ie_go', m).onclick = async ev => {
+    const p = parseExams(t.value);
+    if (!p.length) return toast('لم أتعرف على أي اختبار. تأكد أنك لصقت النص كاملًا من أول سطر «@@ اختبار:»');
+    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'جارٍ الإنشاء…';
+    try {
+      const existing = await q(sb.from('exams').select('id').eq('subject_id', ADM.subject.id));
+      let n = existing.length;
+      for (const ex of p) {
+        const er = await sb.from('exams').insert({ subject_id: ADM.subject.id, title: ex.title, description: ex.description, sort: ++n }).select().single();
+        if (er.error) throw er.error;
+        const qr = await sb.from('exam_questions').insert(ex.questions.map((z, k) => ({
+          exam_id: er.data.id, question: z.question, options: z.options, correct_index: z.correct, sort: k + 1 })));
+        if (qr.error) throw qr.error;
+      }
+      closeModal(); toast('تم إنشاء الاختبار ✔'); admContent(box);
+    } catch (err) {
+      toast('تعذّر الإنشاء: ' + (err.message || err));
+      btn.disabled = false; btn.textContent = 'إنشاء الاختبار';
+    }
+  };
+}
+
+async function importPack(box) {
+  const m = openModal(`<h2 style="margin-top:0">استيراد مجال كامل</h2>
+    <div class="small muted">الصق النص الكامل الذي أرسلته لك. سيُنشأ المجال بدروسه وأسئلته دفعة واحدة داخل المادة «${esc(ADM.subject.name)}».</div>
+    <textarea id="pk_t" style="min-height:220px;margin-top:8px" placeholder="@@ المجال: اسم المجال&#10;=== الدرس: عنوان&#10;الملخص...&#10;--- الأسئلة&#10;1. السؤال؟&#10;أ) ...&#10;الإجابة: أ"></textarea>
+    <div id="pk_info" class="small muted" style="margin:6px 0"></div>
+    <button class="btn-block" id="pk_go">إنشاء المجال</button>`);
+  const t = $('#pk_t', m), info = $('#pk_info', m);
+  t.addEventListener('input', () => {
+    const p = parsePack(t.value);
+    const nl = p.reduce((a, f) => a + f.lessons.length, 0), nq = p.reduce((a, f) => a + f.lessons.reduce((b, x) => b + x.questions.length, 0), 0);
+    info.textContent = nl ? `تم التعرف على ${p.length} مجال، ${nl} درس، ${nq} سؤال` : '';
+  });
+  $('#pk_go', m).onclick = async ev => {
+    const p = parsePack(t.value);
+    if (!p.length) return toast('لم أتعرف على أي درس. تأكد أنك لصقت النص كاملًا من أوله');
+    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'جارٍ الإنشاء…';
+    try {
+      const existing = await q(sb.from('fields').select('id').eq('subject_id', ADM.subject.id));
+      let n = existing.length;
+      for (const fd of p) {
+        const fr = await sb.from('fields').insert({ subject_id: ADM.subject.id, name: fd.name, sort: ++n }).select().single();
+        if (fr.error) throw fr.error;
+        const lr = await sb.from('lessons').insert(fd.lessons.map((x, i) => ({
+          subject_id: ADM.subject.id, field_id: fr.data.id, title: x.title, summary: x.summary, sort: i + 1 }))).select();
+        if (lr.error) throw lr.error;
+        const byTitle = [...lr.data].sort((x, y) => x.sort - y.sort);
+        const qs = [];
+        fd.lessons.forEach((x, i) => x.questions.forEach((z, k) => qs.push({
+          lesson_id: byTitle[i].id, question: z.question, options: z.options, correct_index: z.correct, sort: k + 1 })));
+        if (qs.length) { const qr = await sb.from('questions').insert(qs); if (qr.error) throw qr.error; }
+      }
+      closeModal(); toast('تم إنشاء المجال ✔'); admContent(box);
+    } catch (err) {
+      toast('تعذّر الإنشاء: ' + (err.message || err));
+      btn.disabled = false; btn.textContent = 'إنشاء المجال';
+    }
+  };
+}
+
+/* ---------- لصق أسئلة جاهزة وتحويلها تلقائياً ----------
+الصيغة:   1. نص السؤال؟
+          أ) خيار   ب) خيار   ج) خيار   د) خيار   (كل خيار في سطر)
+          الإجابة: ب                                                    */
+const AR_LABELS = ['ا', 'ب', 'ج', 'د', 'ه', 'و'];
+const normLbl = t => String(t).trim().replace(/[أإآ]/g, 'ا').replace(/ـ/g, '').replace(/^[(\[]|[)\]]$/g, '').toLowerCase();
+function lblIndex(t) {
+  const n = normLbl(t);
+  const i = AR_LABELS.indexOf(n); if (i >= 0) return i;
+  const j = 'abcdef'.indexOf(n); if (j >= 0 && n.length === 1) return j;
+  return -1;
+}
+function parseQuestions(text) {
+  const out = []; let cur = null;
+  const push = () => { if (cur && cur.question.trim() && cur.options.length >= 2) out.push({ question: cur.question.trim(), options: cur.options, correct: Math.max(0, cur.correct) }); cur = null; };
+  const OPT = /^\s*[(\[]?([اأإآبجدهوهـ]|[A-Fa-f])[)\]]?\s*[\)\.\-:،]\s*(.+)$/;
+  const OPT2 = /^\s*\(([اأإآبجدهوهـ]|[A-Fa-f])\)\s*(.+)$/;
+  const ANS = /^\s*(?:الإجابة|الاجابة|الجواب|الإجابة الصحيحة|الاجابة الصحيحة|answer|ans)\s*[:：\-]?\s*(.+)$/i;
+  const QST = /^\s*(?:(?:السؤال|س)\s*)?(\d+|[١-٩][٠-٩]*)\s*[\.\)\-:：]\s*(.+)$/;
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.replace(/[*#]+/g, '').trim();
+    if (!line) continue;
+    const a = line.match(ANS);
+    if (a && cur) {
+      const v = a[1].trim();
+      let i = lblIndex(v.split(/[\s\)\.\-:،]/)[0]);
+      if (i < 0) i = cur.options.findIndex(o => o === v);
+      if (i >= 0 && i < cur.options.length) cur.correct = i;
+      continue;
+    }
+    const q = line.match(QST);
+    if (q && !(cur && cur.options.length === 0 && false)) { push(); cur = { question: q[2], options: [], correct: -1 }; continue; }
+    const o = line.match(OPT) || line.match(OPT2);
+    if (o && cur) {
+      let t = o[2].trim(); let mark = false;
+      if (/^[✔✅☑]|[✔✅☑]$/.test(t)) { mark = true; t = t.replace(/^[✔✅☑]\s*|\s*[✔✅☑]$/g, ''); }
+      cur.options.push(t); if (mark) cur.correct = cur.options.length - 1;
+      continue;
+    }
+    if (cur) { if (cur.options.length) cur.options[cur.options.length - 1] += ' ' + line; else cur.question += ' ' + line; }
+  }
+  push();
+  return out;
+}
+
+function openPasteQs(questions, qcm) {
+  const m = openModal(`<h2 style="margin-top:0">لصق أسئلة جاهزة</h2>
+    <div class="small muted">الصق الأسئلة كما أرسلتُها لك دفعة واحدة، وسأوزّع كل سؤال وخياراته والإجابة الصحيحة تلقائيًا.</div>
+    <textarea id="pq_t" style="min-height:220px;margin-top:8px" placeholder="1. نص السؤال؟&#10;أ) خيار&#10;ب) خيار&#10;ج) خيار&#10;د) خيار&#10;الإجابة: ب"></textarea>
+    <div id="pq_info" class="small muted" style="margin:6px 0"></div>
+    <button class="btn-block" id="pq_go">إضافة الأسئلة</button>`);
+  const t = $('#pq_t', m), info = $('#pq_info', m);
+  t.addEventListener('input', () => { const n = parseQuestions(t.value).length; info.textContent = n ? `تم التعرف على ${n} سؤال` : ''; });
+  $('#pq_go', m).onclick = () => {
+    const qs = parseQuestions(t.value);
+    if (!qs.length) return toast('لم أتعرف على أي سؤال. تأكد أن كل سؤال يبدأ برقم (1.) وكل خيار بحرف (أ) ويوجد سطر «الإجابة: ب»');
+    const noAns = qs.filter(x => x.correct < 0).length;
+    qs.forEach(x => questions.push(x));
+    closeModal(); qcm.render(); toast(`أُضيف ${qs.length} سؤال — لا تنس الحفظ`);
+  };
+}
+
 /* ---------- محرر أسئلة QCM المشترك (الدروس والاختبارات) ---------- */
 function mountQcm(box, questions) {
   const ql = $('#qlist', box);
@@ -327,7 +504,9 @@ function mountQcm(box, questions) {
       renderQs();
     }
   });
-  return { render: renderQs };
+  const api = { render: renderQs };
+  const pb = $('#pasteq', box); if (pb) pb.onclick = () => openPasteQs(questions, api);
+  return api;
 }
 
 // تنظيف الأسئلة وإعادة حساب موضع الإجابة الصحيحة؛ يرجع null مع رسالة عند وجود خطأ
@@ -362,7 +541,8 @@ async function examEditor(box, examId, crumbHtml) {
       <label><input type="checkbox" id="x_hid" ${ex.hidden ? 'checked' : ''}> مخفي عن المشتركين (سحب الاختبار)</label>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2>أسئلة الاختبار (QCM)</h2>
-      <span><button class="btn-sm btn-light" type="button" id="impq">📥 من الدروس</button>
+      <span><button class="btn-sm btn-light" type="button" id="pasteq">📋 لصق أسئلة</button>
+      <button class="btn-sm btn-light" type="button" id="impq">📥 من الدروس</button>
       <button class="btn-sm" type="button" id="addq">+ سؤال</button></span></div>
     <div class="small muted">اختر الدائرة بجانب الإجابة الصحيحة. «من الدروس» ينسخ أسئلة دروس هذه المادة إلى الاختبار (نسخة مستقلة، لا يتأثر الدرس).</div>
     <div id="qlist"></div>
@@ -452,8 +632,9 @@ async function lessonEditor(box, lessonId, crumbHtml) {
       <input type="file" id="l_img" accept="image/*">
     </div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center"><h2>أسئلة الاختبار (QCM)</h2>
-      <button class="btn-sm" type="button" id="addq">+ سؤال</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2>أسئلة الاختبار (QCM)</h2>
+      <span><button class="btn-sm btn-light" type="button" id="pasteq">📋 لصق أسئلة</button>
+      <button class="btn-sm" type="button" id="addq">+ سؤال</button></span></div>
     <div class="small muted">اختر الدائرة بجانب الإجابة الصحيحة.</div>
     <div id="qlist"></div>
     <button class="btn-block" id="savel" style="margin-top:14px">💾 حفظ الدرس والأسئلة</button>
