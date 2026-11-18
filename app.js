@@ -338,14 +338,102 @@ async function pageField(id) {
     <a class="btn btn-line btn-block" style="margin-top:14px" href="#/fields/${sj.id}">الرجوع إلى المجالات</a>`;
 }
 
+/* ---------- رسومات هندسية مدمجة: سطر [[شكل: المفتاح | تعليق اختياري]] داخل الملخص ---------- */
+const GEO = (() => {
+  const W = 220, H = 150, f = n => Math.round(n * 10) / 10;
+  const L = (x1, y1, x2, y2, o = '') => `<line x1="${f(x1)}" y1="${f(y1)}" x2="${f(x2)}" y2="${f(y2)}" ${o}/>`;
+  const D = (x1, y1, x2, y2) => L(x1, y1, x2, y2, 'stroke-dasharray="5 4" stroke-width="1.4" opacity=".75"');
+  const T = (x, y, s, o = '') => `<text x="${f(x)}" y="${f(y)}" ${/text-anchor/.test(o) ? '' : 'text-anchor="middle"'} ${/font-size/.test(o) ? '' : 'font-size="14"'} font-family="sans-serif" fill="currentColor" stroke="none" ${o}>${s}</text>`;
+  const P = (x, y, s) => `<circle cx="${f(x)}" cy="${f(y)}" r="2.6" fill="currentColor" stroke="none"/>` + (s ? T(x, y - 8, s) : '');
+  const poly = pts => `<polygon points="${pts.map(p => f(p[0]) + ',' + f(p[1])).join(' ')}" fill="rgba(46,125,90,.12)"/>`;
+  const R = (x, y, dx, dy) => `<path d="M${f(x + dx * 11)},${f(y)} L${f(x + dx * 11)},${f(y + dy * 11)} L${f(x)},${f(y + dy * 11)}" fill="none" stroke-width="1.4"/>`;
+  const tick = (x1, y1, x2, y2) => { const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, a = Math.atan2(y2 - y1, x2 - x1) + Math.PI / 2; return L(mx - 5 * Math.cos(a), my - 5 * Math.sin(a), mx + 5 * Math.cos(a), my + 5 * Math.sin(a), 'stroke-width="2"'); };
+  const arrow = (x, y, a) => `<polygon points="${f(x)},${f(y)} ${f(x - 11 * Math.cos(a - .4))},${f(y - 11 * Math.sin(a - .4))} ${f(x - 11 * Math.cos(a + .4))},${f(y - 11 * Math.sin(a + .4))}" fill="currentColor" stroke="none"/>`;
+  const angle = (deg, la, lb) => {
+    const ox = deg === 180 ? 110 : deg > 90 ? 95 : 45, oy = 115, r = 90, a = deg * Math.PI / 180, ex = ox + r * Math.cos(a), ey = oy - r * Math.sin(a);
+    const ax = deg === 180 ? 20 : 200, ay = oy, rr = 28, ar = deg === 180 ? '' :
+      `<path d="M${f(ox + rr)},${oy} A${rr},${rr} 0 0 0 ${f(ox + rr * Math.cos(a))},${f(oy - rr * Math.sin(a))}" fill="none" stroke-width="1.6"/>`;
+    const mark = deg === 90 ? R(ox, oy, 1, -1) : ar;
+    return L(ox, oy, deg === 180 ? 20 : 200, oy) + L(ox, oy, deg === 180 ? 200 : ex, deg === 180 ? oy : ey) + mark +
+      P(ox, oy) + T(ox, oy + 20, 'O') + T(deg === 180 ? 14 : 205, oy + 20, deg === 180 ? 'A' : 'B') + T(deg === 180 ? 206 : ex + (ex > 150 ? 12 : 0), deg === 180 ? oy + 20 : ey - 8, deg === 180 ? 'B' : 'A') +
+      (deg === 180 ? '' : T(ox + 52, oy - 10, deg + '°', 'font-size="13"'));
+  };
+  const S = {
+    line: () => L(8, 75, 212, 75) + arrow(8, 75, Math.PI) + arrow(212, 75, 0) + P(70, 75, 'A') + P(150, 75, 'B') + T(110, 110, '(AB)'),
+    ray: () => L(40, 75, 205, 75) + arrow(205, 75, 0) + P(40, 75, 'A') + P(120, 75, 'B') + T(110, 110, '[AB)'),
+    segment: () => L(40, 75, 180, 75) + P(40, 75, 'A') + P(180, 75, 'B') + T(110, 110, '[AB]'),
+    midpoint: () => L(30, 75, 190, 75) + P(30, 75, 'A') + P(110, 75, 'M') + P(190, 75, 'B') + tick(30, 75, 110, 75) + tick(110, 75, 190, 75) + T(110, 110, 'AM = MB'),
+    parallel: () => L(15, 50, 205, 50) + L(15, 100, 205, 100) + T(190, 40, '(m₁)') + T(190, 120, '(m₂)') + D(110, 50, 110, 100),
+    cross: () => L(30, 110, 190, 40) + L(30, 40, 190, 110) + P(110, 75, '') + T(122, 70, 'O'),
+    perp: () => L(15, 105, 205, 105) + L(90, 20, 90, 135) + R(90, 105, 1, -1) + T(110, 98, 'O') + T(200, 120, '(m₁)') + T(72, 32, '(m₂)'),
+    angle_acute: () => angle(50), angle_right: () => angle(90), angle_obtuse: () => angle(130), angle_straight: () => angle(180),
+    square: () => poly([[60, 20], [160, 20], [160, 120], [60, 120]]) + '<rect x="60" y="20" width="100" height="100" fill="none"/>' + D(60, 20, 160, 120) + D(160, 20, 60, 120) +
+      R(60, 20, 1, 1) + R(160, 20, -1, 1) + R(160, 120, -1, -1) + R(60, 120, 1, -1) + T(48, 16, 'A') + T(172, 16, 'B') + T(172, 138, 'C') + T(48, 138, 'D') + T(110, 78, 'O', 'font-size="12"') + T(110, 14, 'a'),
+    rectangle: () => poly([[30, 30], [190, 30], [190, 110], [30, 110]]) + D(30, 30, 190, 110) + D(190, 30, 30, 110) + R(30, 30, 1, 1) + R(190, 30, -1, 1) + R(190, 110, -1, -1) + R(30, 110, 1, -1) +
+      T(110, 22, 'L') + T(206, 74, 'w') + T(18, 26, 'A') + T(202, 26, 'B') + T(202, 128, 'C') + T(18, 128, 'D'),
+    triangle_scalene: () => poly([[30, 120], [190, 120], [80, 25]]) + T(24, 138, 'A') + T(196, 138, 'B') + T(80, 18, 'C'),
+    triangle_isosceles: () => poly([[30, 120], [190, 120], [110, 25]]) + tick(30, 120, 110, 25) + tick(190, 120, 110, 25) + T(24, 138, 'B') + T(196, 138, 'C') + T(110, 18, 'A'),
+    triangle_equilateral: () => poly([[50, 125], [170, 125], [110, 21]]) + tick(50, 125, 170, 125) + tick(50, 125, 110, 21) + tick(170, 125, 110, 21) + T(44, 142, 'B') + T(176, 142, 'C') + T(110, 14, 'A'),
+    triangle_right: () => poly([[50, 125], [190, 125], [50, 25]]) + R(50, 125, 1, -1) + T(44, 142, 'A') + T(196, 142, 'B') + T(44, 18, 'C'),
+    triangle_obtuse: () => poly([[30, 125], [190, 125], [70, 62]]) + T(24, 142, 'A') + T(196, 142, 'B') + T(70, 54, 'C') + T(92, 92, '>90°', 'font-size="12"'),
+    triangle_h: () => poly([[30, 120], [190, 120], [80, 25]]) + D(80, 25, 80, 120) + R(80, 120, 1, -1) + T(24, 138, 'A') + T(196, 138, 'B') + T(80, 18, 'C') + T(110, 138, 'b (القاعدة)') + T(68, 76, 'h'),
+    parallelogram: () => poly([[30, 115], [150, 115], [200, 35], [80, 35]]) + D(80, 35, 80, 115) + R(80, 115, 1, -1) + T(24, 132, 'A') + T(156, 132, 'B') + T(208, 32, 'C') + T(76, 28, 'D') + T(90, 78, 'h') + T(90, 132, 'b'),
+    rhombus: () => poly([[30, 75], [110, 20], [190, 75], [110, 130]]) + D(30, 75, 190, 75) + D(110, 20, 110, 130) + R(110, 75, 1, -1) + tick(30, 75, 110, 20) + tick(110, 20, 190, 75) + tick(190, 75, 110, 130) + tick(110, 130, 30, 75) +
+      T(20, 72, 'A') + T(110, 14, 'B') + T(202, 72, 'C') + T(110, 146, 'D') + T(124, 70, 'O', 'font-size="12"'),
+    trapezoid: () => poly([[20, 120], [200, 120], [150, 35], [70, 35]]) + D(70, 35, 70, 120) + R(70, 120, 1, -1) + T(14, 136, 'A') + T(206, 136, 'B') + T(158, 28, 'C') + T(62, 28, 'D') + T(110, 28, 'b') + T(110, 138, 'B (القاعدة الكبرى)') + T(58, 82, 'h'),
+    trapezoid_right: () => poly([[20, 120], [200, 120], [150, 35], [20, 35]]) + R(20, 120, 1, -1) + R(20, 35, 1, 1) + T(14, 136, 'A') + T(206, 136, 'B') + T(158, 28, 'C') + T(14, 28, 'D') + T(85, 28, 'b') + T(110, 138, 'B'),
+    circle: () => '<circle cx="110" cy="75" r="55" fill="rgba(46,125,90,.12)"/>' + L(55, 75, 165, 75) + P(110, 75, '') + T(110, 92, 'O') + T(140, 68, 'r') + T(80, 68, 'r') + T(110, 11, 'd = 2 × r', 'font-size="12"'),
+    cube: () => D(80, 20, 80, 100) + D(80, 100, 160, 100) + D(40, 135, 80, 100) + poly([[40, 55], [120, 55], [120, 135], [40, 135]]) + L(40, 55, 80, 20) + L(120, 55, 160, 20) + L(80, 20, 160, 20) + L(160, 20, 160, 100) + L(120, 135, 160, 100) + T(80, 150, 'a'),
+    cuboid: () => D(80, 15, 80, 95) + D(80, 95, 190, 95) + D(30, 130, 80, 95) + poly([[30, 55], [140, 55], [140, 130], [30, 130]]) + L(30, 55, 80, 15) + L(140, 55, 190, 15) + L(80, 15, 190, 15) + L(190, 15, 190, 95) + L(140, 130, 190, 95) +
+      T(85, 148, 'L') + T(176, 120, 'w') + T(18, 95, 'h'),
+    cylinder: () => `<ellipse cx="110" cy="35" rx="55" ry="15" fill="rgba(46,125,90,.18)"/>` + L(55, 35, 55, 115) + L(165, 35, 165, 115) + `<path d="M55,115 A55,15 0 0 0 165,115" fill="none"/><path d="M55,115 A55,15 0 0 1 165,115" fill="none" stroke-dasharray="5 4" opacity=".75"/>` +
+      D(110, 35, 165, 35) + D(110, 35, 110, 115) + T(140, 28, 'r') + T(122, 78, 'h', 'text-anchor="start"'),
+    sphere: () => '<circle cx="110" cy="75" r="60" fill="rgba(46,125,90,.12)"/><ellipse cx="110" cy="75" rx="60" ry="16" fill="none" stroke-dasharray="5 4" opacity=".75"/>' + L(110, 75, 170, 75) + P(110, 75, '') + T(110, 95, 'O') + T(145, 68, 'r')
+  };
+
+  const MAP_PTS = [[-17.05,21.34],[-13.0,21.34],[-13.0,23.45],[-12.0,23.45],[-12.0,26.0],[-8.67,27.29],[-8.67,25.0],[-4.83,24.99],[-5.6,16.5],[-5.3,15.4],[-8.0,15.2],[-10.6,15.5],[-11.5,15.6],[-12.2,14.75],[-14.3,16.6],[-16.5,16.07],[-16.3,17.5],[-16.2,19.3],[-16.6,20.3],[-17.05,20.8]];
+  const mx = lon => (lon + 17.5) * 15 + 6, my = lat => (27.8 - lat) * 15 + 6;
+  const CITY = [['نواكشوط', -15.98, 18.09], ['نواذيبو', -17.03, 20.93], ['أطار', -13.05, 20.52], ['ازويرات', -12.48, 22.73], ['كيفة', -11.4, 16.62], ['النعمة', -7.26, 16.62], ['روصو', -15.8, 16.5], ['تجكجة', -11.43, 18.56]];
+  const mapPoly = () => `<polygon points="${MAP_PTS.map(q => f(mx(q[0])) + ',' + f(my(q[1]))).join(' ')}" fill="rgba(46,125,90,.14)"/>`;
+  const cities = list => CITY.filter(c => !list || list.includes(c[0])).map(c => P(mx(c[1]), my(c[2]), '').replace(/<text.*$/, '') + (c[1] < -15 ? T(mx(c[1]) + 6, my(c[2]) + 3, c[0], 'font-size="9.5" text-anchor="start"') : T(mx(c[1]), my(c[2]) - 6, c[0], 'font-size="9.5"'))).join('');
+  const compass = (x, y) => L(x, y + 14, x, y - 14, 'stroke-width="1.6"') + L(x - 14, y, x + 14, y, 'stroke-width="1.6"') + arrow(x, y - 14, -Math.PI / 2) + T(x, y - 18, 'ش', 'font-size="11"') + T(x, y + 27, 'ج', 'font-size="11"') + T(x + 20, y + 4, 'ق', 'font-size="11"') + T(x - 20, y + 4, 'غ', 'font-size="11"');
+  const SZ = { mauritania: [240, 215], mauritania_cities: [240, 215], map_scale: [240, 140], compass: [200, 200], numberline: [260, 90] };
+  S.mauritania = () => mapPoly() + compass(210, 40) + T(120, 14, 'موريتانيا', 'font-size="12"');
+  S.mauritania_cities = () => mapPoly() + cities() + compass(210, 40) + T(120, 14, 'موريتانيا (رسم تقريبي)', 'font-size="11"');
+  S.map_scale = () => L(30, 50, 210, 50, 'stroke-width="2.5"') + P(30, 50, 'A') + P(210, 50, 'B') + T(120, 40, 'على الخريطة: 6 سم', 'font-size="12"') +
+    L(30, 70, 30, 90) + L(210, 70, 210, 90) + L(30, 80, 210, 80, 'stroke-dasharray="4 3"') + T(120, 104, 'في الواقع: 600 كم', 'font-size="12"') + T(120, 126, 'السلم = (على الخريطة) ÷ (الحقيقية)', 'font-size="11"');
+  S.compass = () => L(100, 30, 100, 170, 'stroke-width="2"') + L(30, 100, 170, 100, 'stroke-width="2"') + arrow(100, 30, -Math.PI / 2) + `<circle cx="100" cy="100" r="62" fill="none" stroke-width="1" opacity=".5"/>` + T(100, 20, 'الشمال (ش)') + T(100, 190, 'الجنوب (ج)') + T(172, 96, 'شرق', 'text-anchor="start"') + T(28, 96, 'غرب', 'text-anchor="end"');
+  S.numberline = () => L(15, 45, 245, 45) + arrow(245, 45, 0) + [0, 1, 2, 3, 4].map(i => L(30 + i * 50, 38, 30 + i * 50, 52) + T(30 + i * 50, 70, String(i))).join('') + L(30, 45, 80, 45, 'stroke-width="4" opacity=".5"');
+  return (key, cap) => {
+    const g = S[key]; if (!g) return '';
+    const [vw, vh] = SZ[key] || [W, H];
+    return `<figure style="margin:12px 0;text-align:center"><svg viewBox="0 0 ${vw} ${vh}" width="100%" style="max-width:${vw > 230 ? 340 : 300}px;color:var(--green-d)" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" role="img" aria-label="${esc(cap || key)}" direction="ltr">${g()}</svg>${cap ? `<figcaption style="font-size:15px;color:#555">${esc(cap)}</figcaption>` : ''}</figure>`;
+  };
+})();
+
+/* نص رياضي: الكسر {3/5} أو {أ+ب/ج}، والأس a^2 */
+function rich(t) {
+  return esc(t)
+    .replace(/\{([^{}\/]+)\/([^{}\/]+)\}/g, (m, a, b) => `<span dir="ltr" style="display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 3px;font-size:.92em;line-height:1.25"><span style="border-bottom:1.5px solid currentColor;padding:0 4px">${a.trim()}</span><span style="padding:0 4px">${b.trim()}</span></span>`)
+    .replace(/\^([0-9a-zA-Z]+)/g, '<sup>$1</sup>');
+}
+/* نص سؤال: يسمح بسطر رسم [[شكل: key | تعليق]] في بدايته أو نهايته */
+function richQ(t) {
+  let figs = '';
+  const rest = String(t || '').replace(/\[\[\s*(?:شكل|رسم|خريطة)\s*[:：]\s*([a-z_]+)\s*(?:\|\s*(.*?))?\s*\]\]/gi, (m, k, c) => { figs += GEO(k.toLowerCase(), c || ''); return ''; });
+  return rich(rest.trim()) + figs;
+}
+
 function fmtSummary(t) {
   let out = '', inUl = false;
   for (const raw of String(t || '').split(/\r?\n/)) {
     const l = raw.trim();
-    if (/^[-•*]\s/.test(l)) { if (!inUl) { out += '<ul>'; inUl = true; } out += `<li>${esc(l.slice(2))}</li>`; continue; }
+    if (/^[-•*]\s/.test(l)) { if (!inUl) { out += '<ul>'; inUl = true; } out += `<li>${rich(l.slice(2))}</li>`; continue; }
     if (inUl) { out += '</ul>'; inUl = false; }
     if (!l) continue;
-    out += l.startsWith('# ') ? `<h3>${esc(l.slice(2))}</h3>` : `<p>${esc(l)}</p>`;
+    const gm = l.match(/^\[\[\s*(?:شكل|رسم|خريطة)\s*[:：]\s*([a-z_]+)\s*(?:\|\s*(.*?))?\s*\]\]$/i);
+    if (gm) { out += GEO(gm[1].toLowerCase(), gm[2] || ''); continue; }
+    out += l.startsWith('# ') ? `<h3>${rich(l.slice(2))}</h3>` : `<p>${rich(l)}</p>`;
   }
   return out + (inUl ? '</ul>' : '');
 }
@@ -417,8 +505,8 @@ async function runQuiz(c) {
     <h1>${c.head}${esc(ls.title)}</h1>
     <form id="quiz">
       ${qs.map((x, i) => `
-        <div class="q"><div class="qt">${i + 1}. ${esc(x.question)}</div>
-          ${opts(x.options).map((o, j) => `<label class="opt"><input type="radio" name="q${i}" value="${j}"><span>${esc(o)}</span></label>`).join('')}
+        <div class="q"><div class="qt">${i + 1}. ${richQ(x.question)}</div>
+          ${opts(x.options).map((o, j) => `<label class="opt"><input type="radio" name="q${i}" value="${j}"><span>${rich(o)}</span></label>`).join('')}
         </div>`).join('')}
       <button class="btn-block" type="submit">إنهاء الاختبار</button>
     </form>`;
@@ -452,10 +540,10 @@ function showResult(c, ls, qs, res, opts) {
     <h2>مراجعة الإجابات</h2>
     ${qs.map((x, i) => {
       const d = det[x.id];
-      return `<div class="q"><div class="qt">${i + 1}. ${esc(x.question)}</div>
+      return `<div class="q"><div class="qt">${i + 1}. ${richQ(x.question)}</div>
         ${opts(x.options).map((o, j) => {
           const c = j === d.correct_index ? 'ok' : (j === d.chosen ? 'no' : '');
-          return `<div class="opt ${c}">${c === 'ok' ? '✔' : c === 'no' ? '✘' : '○'} <span>${esc(o)}</span></div>`;
+          return `<div class="opt ${c}">${c === 'ok' ? '✔' : c === 'no' ? '✘' : '○'} <span>${rich(o)}</span></div>`;
         }).join('')}</div>`;
     }).join('')}`;
 }
