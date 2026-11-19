@@ -415,7 +415,9 @@ const GEO = (() => {
 function rich(t) {
   return esc(t)
     .replace(/\{([^{}\/]+)\/([^{}\/]+)\}/g, (m, a, b) => `<span dir="ltr" style="display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 3px;font-size:.92em;line-height:1.25"><span style="border-bottom:1.5px solid currentColor;padding:0 4px">${a.trim()}</span><span style="padding:0 4px">${b.trim()}</span></span>`)
-    .replace(/\^([0-9a-zA-Z]+)/g, '<sup>$1</sup>');
+    .replace(/\^([0-9a-zA-Z]+)/g, '<sup>$1</sup>')
+    /* أرقام لاتينية مفصولة بمسافات (12 000) تبقى بترتيبها الصحيح داخل النص العربي */
+    .split(/(<[^>]+>)/).map(x => x.startsWith('<') ? x : x.replace(/\d+(?:[ \u00a0]\d{3})+(?:\.\d+)?/g, '<span dir="ltr">$&</span>')).join('');
 }
 /* نص سؤال: يسمح بسطر رسم [[شكل: key | تعليق]] في بدايته أو نهايته */
 function richQ(t) {
@@ -638,6 +640,34 @@ async function pageRecovery() {
     S.recovery = false; toast('تم تغيير كلمة المرور'); await loadSession(); renderNav(); go('#/');
   };
 }
+
+/* ---------- إصلاح عرض الأرقام: 10 000 كانت تظهر 000 10 في النص العربي ----------
+   كل رقمين فأكثر تفصل بينهما مسافة يُلفّان في عنصر من اليسار إلى اليمين، في كل أنحاء التطبيق */
+(function fixNumbers() {
+  const RX = /\d+(?:[ \u00a0]\d+)+(?:\.\d+)?/g, SKIP = /^(SCRIPT|STYLE|TEXTAREA|INPUT|SELECT|OPTION|SVG|CODE)$/;
+  const walk = root => {
+    if (!root) return;
+    if (root.nodeType === 3) return wrap(root);
+    if (root.nodeType !== 1 || SKIP.test(root.nodeName.toUpperCase())) return;
+    if (root.closest && root.closest('[dir=ltr]')) return;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), list = [];
+    for (let n; (n = w.nextNode());) list.push(n);
+    list.forEach(wrap);
+  };
+  const wrap = t => {
+    const p = t.parentNode; if (!p || SKIP.test(p.nodeName.toUpperCase()) || (p.closest && p.closest('[dir=ltr]'))) return;
+    const s = t.data; RX.lastIndex = 0; if (!RX.test(s)) return; RX.lastIndex = 0;
+    const f = document.createDocumentFragment(); let i = 0, m;
+    while ((m = RX.exec(s))) {
+      if (m.index > i) f.appendChild(document.createTextNode(s.slice(i, m.index)));
+      const sp = document.createElement('span'); sp.dir = 'ltr'; sp.style.unicodeBidi = 'isolate'; sp.textContent = m[0]; f.appendChild(sp); i = m.index + m[0].length;
+    }
+    if (i < s.length) f.appendChild(document.createTextNode(s.slice(i)));
+    p.replaceChild(f, t);
+  };
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(walk))).observe(document.body, { childList: true, subtree: true });
+  walk(document.body);
+})();
 
 /* ---------- التشغيل ---------- */
 sb.auth.onAuthStateChange(ev => {
