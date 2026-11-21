@@ -1,6 +1,6 @@
 // خدمة بسيطة: تخزّن ملفات التطبيق نفسها فقط (لا الدروس ولا الصور) ليفتح التطبيق بسرعة.
 // المحتوى المدفوع لا يُخزَّن أبداً في الجهاز.
-const CACHE = 'mulakhasati-v6';
+const CACHE = 'mulakhasati-v7';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'admin.js', 'config.js', 'icon.svg'];
 
 self.addEventListener('install', e => {

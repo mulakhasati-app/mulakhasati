@@ -119,3 +119,12 @@ body.protected img{pointer-events:none;-webkit-user-drag:none;user-drag:none}
   body *{display:none!important}
   body::before{content:'الطباعة غير متاحة';display:block;font-size:30px;text-align:center;padding:40px}
 }
+
+.cpnum{display:inline-block;font-weight:700;font-size:1.15rem;letter-spacing:.5px;background:#fff;border:1px solid #e2c35a;border-radius:8px;padding:2px 10px;margin:2px 6px;user-select:all;-webkit-user-select:all}
+.cpbtn{background:var(--brand,#1f7a5a);color:#fff;border:0;border-radius:8px;padding:6px 12px;font:inherit;font-size:.9rem;cursor:pointer;margin:2px 0}
+.upzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;min-height:170px;margin:12px 0 4px;padding:18px;border:3px dashed #1f7a5a;border-radius:18px;background:rgba(31,122,90,.07);cursor:pointer}
+.upzone .up-ic{font-size:2.6rem;line-height:1}
+.upzone .up-t{font-size:1.3rem;color:#1f7a5a}
+.upzone .up-s{font-size:.9rem;opacity:.75}
+.upzone.done{border-style:solid;background:rgba(31,122,90,.14)}
+.upzone img{max-width:100%;max-height:220px;border-radius:12px;margin-top:8px}

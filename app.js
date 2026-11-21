@@ -238,13 +238,26 @@ async function pageLevel(id) {
     <form id="payform">
       ${plansView(plans, true)}
       <h2>طريقة الدفع</h2>
-      <div class="payinfo">${esc(S.settings.payment_info || 'تواصل مع المدير لمعرفة طريقة الدفع.')}</div>
-      <label for="receipt">صورة إيصال الدفع</label>
-      <input type="file" id="receipt" accept="image/*">
+      <div class="payinfo">${payInfoHtml(S.settings.payment_info || 'تواصل مع المدير لمعرفة طريقة الدفع.')}</div>
+      <label class="upzone" for="receipt" id="upzone">
+        <span class="up-ic">📤</span>
+        <b class="up-t">أرسل صورة الدفع من هنا</b>
+        <span class="up-s">اضغط لاختيار صورة إيصال الدفع من هاتفك</span>
+        <img id="uppv" alt="" hidden>
+      </label>
+      <input type="file" id="receipt" accept="image/*" hidden>
       <button class="btn-block" type="submit" style="margin-top:14px">إرسال طلب الاشتراك</button>
     </form>`;
   $app.innerHTML = html;
 
+  $$('.cpbtn').forEach(b => b.onclick = () => copyText(b.dataset.n, b));
+  $('#receipt').addEventListener('change', e => {
+    const f = e.target.files[0], z = $('#upzone'), pv = $('#uppv');
+    if (!f) { z.classList.remove('done'); pv.hidden = true; return; }
+    z.classList.add('done'); $('.up-t', z).textContent = '✔ تم اختيار الصورة';
+    $('.up-s', z).textContent = 'اضغط مرة أخرى لتغييرها';
+    try { pv.src = URL.createObjectURL(f); pv.hidden = false; } catch (_) {}
+  });
   $$('.plan input').forEach(i => i.addEventListener('change', () => {
     $$('.plan').forEach(p => p.classList.toggle('sel', p.querySelector('input').checked));
   }));
@@ -265,6 +278,22 @@ async function pageLevel(id) {
       toast('تم إرسال الطلب ✔'); route();
     } catch (err) { toast('تعذّر الإرسال: ' + (err.message || err)); btn.disabled = false; btn.textContent = 'إرسال طلب الاشتراك'; }
   });
+}
+function payInfoHtml(t) {
+  return esc(t).replace(/\d[\d ]{5,}\d/g, m => {
+    const n = m.replace(/ /g, '');
+    return `<span class="cpnum" dir="ltr">${m}</span><button type="button" class="cpbtn" data-n="${n}">📋 نسخ</button>`;
+  });
+}
+async function copyText(txt, btn) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(txt); ok = true; } catch (_) {}
+  if (!ok) {
+    try { const ta = document.createElement('textarea'); ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove(); } catch (_) {}
+  }
+  toast(ok ? 'تم نسخ الرقم ✔' : 'تعذّر النسخ، انسخ الرقم يدويًا');
+  if (ok && btn) { const o = btn.textContent; btn.textContent = '✔ تم'; setTimeout(() => btn.textContent = o, 1500); }
 }
 function plansView(plans, selectable) {
   if (!plans.length) return '<div class="notice n-info">لم يحدد المدير أسعار الاشتراك بعد.</div>';
