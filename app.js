@@ -149,13 +149,24 @@ window.addEventListener('hashchange', route);
 
 /* ---------- الصفحة الرئيسية ---------- */
 async function pageWelcome() {
-  const stages = await q(sb.from('stages').select('*').order('sort').order('name'));
+  let tiles = '', title = 'اختر المرحلة الدراسية';
+  if (S.settings.home_mode === 'custom') {
+    let items = []; try { items = JSON.parse(S.settings.home_items || '[]'); } catch (e) {}
+    if (S.settings.home_title) title = S.settings.home_title;
+    tiles = items.length
+      ? `<div class="grid">${items.map(it => { const [k, id] = String(it.to || '').split(':');
+          return `<a class="card tile" href="#/${k === 'level' ? 'level' : 'stage'}/${esc(id)}"><span class="ico">${esc(it.icon || '🎓')}</span>${esc(it.title)}</a>`; }).join('')}</div>`
+      : '<div class="notice n-info">لم تُضف عناصر للصفحة الرئيسية بعد.</div>';
+  } else {
+    const stages = await q(sb.from('stages').select('*').order('sort').order('name'));
+    tiles = stages.length
+      ? `<div class="grid">${stages.map(s => `<a class="card tile" href="#/stage/${s.id}"><span class="ico">🎓</span>${esc(s.name)}</a>`).join('')}</div>`
+      : '<div class="notice n-info">لا توجد مراحل دراسية بعد.</div>';
+  }
   $app.innerHTML = `
     <div class="hero"><h1>📚 ملخصاتي</h1><p>دروس ملخصة بصور تعبيرية واختبارات لكل مستوى دراسي</p></div>
-    <h2>اختر المرحلة الدراسية</h2>
-    ${stages.length
-      ? `<div class="grid">${stages.map(s => `<a class="card tile" href="#/stage/${s.id}"><span class="ico">🎓</span>${esc(s.name)}</a>`).join('')}</div>`
-      : '<div class="notice n-info">لا توجد مراحل دراسية بعد.</div>'}
+    <h2>${esc(title)}</h2>
+    ${tiles}
     <div id="inst"></div>`;
   renderInstall();
 }
@@ -594,7 +605,7 @@ async function pageMe() {
   const st = { pending: ['قيد المراجعة', 'b-amber'], approved: ['مقبول', 'b-green'], rejected: ['مرفوض', 'b-red'] };
   $app.innerHTML = `
     <h1>حسابي</h1>
-    <div class="card"><b>${esc(S.profile?.full_name)}</b><br><span class="muted">${esc(S.profile?.phone)} · ${esc(S.profile?.email)}</span></div>
+    <div class="card"><b>${esc(S.profile?.full_name)}</b><br><span class="muted">${esc(S.profile?.phone)}${S.profile?.email ? ' · ' + esc(S.profile.email) : ''}</span></div>
     <h2>اشتراكاتي</h2>
     ${subs.length ? `<div class="list">${subs.map(s => {
       const on = new Date(s.ends_at).getTime() > now;
@@ -611,9 +622,19 @@ async function pageMe() {
 }
 
 /* ---------- الدخول والتسجيل ---------- */
-const authErr = m => /Invalid login/i.test(m) ? 'البريد أو كلمة المرور غير صحيحة'
-  : /already registered/i.test(m) ? 'هذا البريد مسجّل من قبل، سجّل الدخول'
+const PHONE_DOMAIN = 'mulakhasati.app';
+function normPhone(v) {
+  let d = String(v || '').replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c)).replace(/\D/g, '');
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('222')) d = d.slice(3);
+  return d;
+}
+const phoneEmail = d => `u${d}@${PHONE_DOMAIN}`;
+const authErr = m => /Invalid login/i.test(m) ? 'رقم الهاتف أو كلمة المرور غير صحيحة'
+  : /already registered/i.test(m) ? 'رقم الهاتف مسجّل من قبل، سجّل الدخول'
   : /at least 6/i.test(m) ? 'كلمة المرور قصيرة (6 أحرف على الأقل)'
+  : /not confirmed/i.test(m) ? 'الحساب غير مفعّل، تواصل مع المدير'
+  : /Database error/i.test(m) ? 'تعذّر إنشاء الحساب، تحقّق من البيانات'
   : /rate limit/i.test(m) ? 'محاولات كثيرة، انتظر قليلاً ثم أعد المحاولة' : m;
 
 async function pageAuth(mode = 'login') {
@@ -621,22 +642,17 @@ async function pageAuth(mode = 'login') {
   const tabs = `<div class="tabs"><a href="#/login" class="${mode === 'login' ? 'on' : ''}">دخول</a>
     <a href="#/login/signup" class="${mode === 'signup' ? 'on' : ''}">حساب جديد</a></div>`;
   if (mode === 'forgot') {
-    $app.innerHTML = `<h1>استرجاع كلمة المرور</h1><form id="af">
-      <label>البريد الإلكتروني</label><input type="email" id="em" required autocomplete="email">
-      <button class="btn-block" style="margin-top:14px">إرسال رابط الاسترجاع</button></form>
+    $app.innerHTML = `<h1>نسيت كلمة المرور؟</h1>
+      <div class="notice n-info">تواصل مع المدير وأعطه اسمك ورقم هاتفك، وسيضع لك كلمة مرور جديدة.</div>
       <p><a href="#/login">رجوع</a></p>`;
-    $('#af').onsubmit = async e => {
-      e.preventDefault();
-      const { error } = await sb.auth.resetPasswordForEmail($('#em').value.trim(), { redirectTo: location.origin + location.pathname });
-      toast(error ? authErr(error.message) : 'أُرسل الرابط إلى بريدك');
-    };
     return;
   }
+  const em = S.settings.signup_email || 'optional';
   $app.innerHTML = `<h1>${mode === 'signup' ? 'إنشاء حساب' : 'تسجيل الدخول'}</h1>${tabs}
     <form id="af">
-      ${mode === 'signup' ? `<label>الاسم الكامل</label><input type="text" id="nm" required autocomplete="name">
-        <label>رقم الهاتف</label><input type="tel" id="ph" required autocomplete="tel" inputmode="tel">` : ''}
-      <label>البريد الإلكتروني</label><input type="email" id="em" required autocomplete="email">
+      ${mode === 'signup' ? `<label>الاسم الكامل</label><input type="text" id="nm" required autocomplete="name">` : ''}
+      <label>رقم الهاتف</label><input type="text" id="ph" required autocomplete="username" inputmode="tel" dir="ltr" style="text-align:right">
+      ${mode === 'signup' && em !== 'off' ? `<label>البريد الإلكتروني ${em === 'optional' ? '(اختياري)' : ''}</label><input type="email" id="em" ${em === 'required' ? 'required' : ''} autocomplete="email">` : ''}
       <label>كلمة المرور</label><input type="password" id="pw" required minlength="6" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}">
       <button class="btn-block" style="margin-top:14px">${mode === 'signup' ? 'إنشاء الحساب' : 'دخول'}</button>
     </form>
@@ -644,13 +660,19 @@ async function pageAuth(mode = 'login') {
   $('#af').onsubmit = async e => {
     e.preventDefault();
     const btn = e.submitter; btn.disabled = true;
-    const email = $('#em').value.trim(), password = $('#pw').value;
+    const raw = $('#ph').value.trim(), password = $('#pw').value;
+    const isMail = raw.includes('@');           // الدخول بالبريد للمدير فقط
+    const d = normPhone(raw);
+    if (!isMail && d.length < 8) { btn.disabled = false; return toast('اكتب رقم هاتف صحيحاً'); }
+    const email = isMail ? raw : phoneEmail(d);
     let res;
     if (mode === 'signup') {
-      res = await sb.auth.signUp({ email, password, options: { data: { full_name: $('#nm').value.trim(), phone: $('#ph').value.trim() } } });
+      if (isMail) { btn.disabled = false; return toast('التسجيل برقم الهاتف فقط'); }
+      res = await sb.auth.signUp({ email, password, options: { data: {
+        full_name: $('#nm').value.trim(), phone: d, contact_email: ($('#em')?.value || '').trim() } } });
       if (!res.error && !res.data.session) {
         btn.disabled = false;
-        return toast('تحقّق من بريدك لتأكيد الحساب ثم سجّل الدخول');
+        return toast('الحساب يحتاج تفعيلاً من المدير');
       }
     } else res = await sb.auth.signInWithPassword({ email, password });
     if (res.error) { btn.disabled = false; return toast(authErr(res.error.message)); }

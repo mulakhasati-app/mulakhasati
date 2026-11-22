@@ -92,11 +92,19 @@ async function admSubs(box) {
   box.innerHTML = `
     <div style="display:flex;gap:8px;margin-bottom:10px">
       <input type="text" id="sq" placeholder="ابحث بالاسم أو الهاتف أو البريد" style="flex:1">
-      <button id="addsub">+ اشتراك يدوي</button></div>
+      <button id="addsub">+ اشتراك يدوي</button>
+      <button id="resetpw" class="btn-light">🔑 كلمة مرور</button></div>
     <div class="list" id="sublist"></div>`;
   draw('');
   $('#sq').oninput = e => draw(e.target.value);
   $('#addsub').onclick = () => manualSub(box);
+  $('#resetpw').onclick = async () => {
+    const ph = prompt('رقم هاتف المشترك:'); if (!ph) return;
+    const pw = prompt('كلمة المرور الجديدة (6 أحرف على الأقل):'); if (!pw) return;
+    const d = ph.replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c)).replace(/\D/g, '').replace(/^00/, '').replace(/^222(?=\d{8}$)/, '');
+    const { error } = await sb.rpc('admin_set_password', { p_email: 'u' + d + '@mulakhasati.app', p_pw: pw });
+    toast(error ? 'خطأ: ' + error.message : 'تم تغيير كلمة المرور ✔');
+  };
   box.onclick = async e => {
     const ext = e.target.closest('[data-ext]');
     if (ext) {
@@ -696,17 +704,67 @@ async function lessonEditor(box, lessonId, crumbHtml) {
 /* =============== الإعدادات =============== */
 async function admSettings(box) {
   await loadSettings();
+  const [stages, levels] = await Promise.all([
+    q(sb.from('stages').select('id,name').order('sort').order('name')),
+    q(sb.from('levels').select('id,name,stages(name)').order('name'))]);
+  let items = []; try { items = JSON.parse(S.settings.home_items || '[]'); } catch (e) {}
+  const opts = sel => `<optgroup label="مراحل">${stages.map(x => `<option value="stage:${x.id}" ${sel === 'stage:' + x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>
+    <optgroup label="مستويات">${levels.map(x => `<option value="level:${x.id}" ${sel === 'level:' + x.id ? 'selected' : ''}>${esc(x.stages?.name)} — ${esc(x.name)}</option>`).join('')}</optgroup>`;
+  const mode = S.settings.home_mode === 'custom' ? 'custom' : 'stages', em = S.settings.signup_email || 'optional';
   box.innerHTML = `<div class="card" style="text-align:start">
+    <h3 style="margin-top:0">🏠 الصفحة الرئيسية</h3>
+    <label><input type="radio" name="hm" value="stages" ${mode === 'stages' ? 'checked' : ''}> عرض المراحل الدراسية كلها (الوضع الحالي)</label>
+    <label><input type="radio" name="hm" value="custom" ${mode === 'custom' ? 'checked' : ''}> قائمة أحددها أنا</label>
+    <div id="hcustom" ${mode === 'custom' ? '' : 'hidden'}>
+      <label>عنوان القائمة</label><input type="text" id="h_title" value="${esc(S.settings.home_title || '')}" placeholder="مثال: ماذا تريد أن تدرس؟">
+      <div id="hitems"></div>
+      <button type="button" class="btn-light" id="hadd" style="margin-top:8px">+ إضافة عنصر</button>
+    </div>
+    <h3>📝 التسجيل</h3>
+    <label>البريد الإلكتروني في صفحة إنشاء الحساب</label>
+    <select id="s_em"><option value="off" ${em === 'off' ? 'selected' : ''}>لا يظهر</option>
+      <option value="optional" ${em === 'optional' ? 'selected' : ''}>اختياري</option>
+      <option value="required" ${em === 'required' ? 'selected' : ''}>إجباري</option></select>
+    <div class="small muted">التسجيل يكون دائماً بالاسم ورقم الهاتف وكلمة المرور. البريد هنا للتواصل فقط.</div>
+    <h3>💳 الدفع</h3>
     <label>تعليمات الدفع (تظهر للمشترك قبل رفع الإيصال)</label>
     <textarea id="s_pay" style="min-height:140px">${esc(S.settings.payment_info || '')}</textarea>
     <div class="small muted">اكتب رقم حسابك وطريقة التحويل والمبلغ المطلوب وأي ملاحظة.</div>
     <label>العملة (تظهر بجانب الأسعار)</label>
     <input type="text" id="s_cur" value="${esc(S.settings.currency || '')}">
     <button class="btn-block" id="s_save" style="margin-top:14px">حفظ الإعدادات</button></div>`;
+  const drawItems = () => {
+    $('#hitems', box).innerHTML = items.map((it, i) => `<div class="row" style="gap:6px;flex-wrap:wrap" data-i="${i}">
+      <input type="text" class="hi-ic" value="${esc(it.icon || '')}" placeholder="🎓" style="width:56px">
+      <input type="text" class="hi-t" value="${esc(it.title || '')}" placeholder="العنوان" style="flex:1;min-width:140px">
+      <select class="hi-to" style="width:100%">${opts(it.to)}</select>
+      <button type="button" class="btn-sm btn-light" data-up="${i}">↑</button>
+      <button type="button" class="btn-sm btn-light" data-dn="${i}">↓</button>
+      <button type="button" class="btn-sm btn-red" data-del="${i}">حذف</button></div>`).join('') || '<div class="muted small">لا عناصر بعد.</div>';
+  };
+  const sync = () => $$('#hitems [data-i]', box).forEach(r => { const it = items[+r.dataset.i];
+    it.icon = $('.hi-ic', r).value.trim(); it.title = $('.hi-t', r).value.trim(); it.to = $('.hi-to', r).value; });
+  drawItems();
+  $$('input[name=hm]', box).forEach(r => r.onchange = () => { $('#hcustom', box).hidden = r.value !== 'custom' || !r.checked; });
+  $('#hadd', box).onclick = () => { sync(); items.push({ icon: '🎓', title: '', to: (stages[0] ? 'stage:' + stages[0].id : '') }); drawItems(); };
+  $('#hitems', box).onclick = e => {
+    const b = e.target.closest('button'); if (!b) return; sync();
+    if (b.dataset.del != null) items.splice(+b.dataset.del, 1);
+    else if (b.dataset.up != null && +b.dataset.up > 0) { const i = +b.dataset.up; [items[i - 1], items[i]] = [items[i], items[i - 1]]; }
+    else if (b.dataset.dn != null && +b.dataset.dn < items.length - 1) { const i = +b.dataset.dn; [items[i + 1], items[i]] = [items[i], items[i + 1]]; }
+    drawItems();
+  };
   $('#s_save', box).onclick = async () => {
+    sync();
+    const hm = $('input[name=hm]:checked', box).value;
+    if (hm === 'custom' && items.some(x => !x.title)) return toast('اكتب عنواناً لكل عنصر في القائمة');
     const { error } = await sb.from('settings').upsert([
       { key: 'payment_info', value: $('#s_pay', box).value },
-      { key: 'currency', value: $('#s_cur', box).value.trim() }
+      { key: 'currency', value: $('#s_cur', box).value.trim() },
+      { key: 'home_mode', value: hm },
+      { key: 'home_title', value: $('#h_title', box).value.trim() },
+      { key: 'home_items', value: JSON.stringify(items) },
+      { key: 'signup_email', value: $('#s_em', box).value }
     ]);
     if (error) return toast('خطأ: ' + error.message);
     await loadSettings(); toast('تم الحفظ ✔');
