@@ -423,8 +423,10 @@ function parseQuestions(text) {
   const ANS = /^\s*(?:الإجابة|الاجابة|الجواب|الإجابة الصحيحة|الاجابة الصحيحة|answer|ans)\s*[:：\-]?\s*(.+)$/i;
   const QST = /^\s*(?:(?:السؤال|س)\s*)?(\d+|[١-٩][٠-٩]*)\s*[\.\)\-:：]\s*(.+)$/;
   for (const raw of String(text).split(/\r?\n/)) {
+    const rawT = raw.trim();
     const line = raw.replace(/[*#]+/g, '').trim();
     if (!line) continue;
+    if (/^(={2,}|@@|-{2,})/.test(rawT)) { push(); continue; }
     const a = line.match(ANS);
     if (a && cur) {
       const v = a[1].trim();
@@ -442,6 +444,7 @@ function parseQuestions(text) {
       cur.options.push(t); if (mark) cur.correct = cur.options.length - 1;
       continue;
     }
+    if (cur && cur.correct >= 0 && cur.options.length >= 2) continue;
     if (cur) { if (cur.options.length) cur.options[cur.options.length - 1] += ' ' + line; else cur.question += ' ' + line; }
   }
   push();
