@@ -364,7 +364,7 @@ async function pageFields(id, kind = 'lessons') {
     ${!vf.length && !vl.length ? '<div class="notice n-info">لا توجد مجالات في هذه المادة بعد.</div>' : ''}
     ${solved ? `<a class="btn btn-block" style="margin-top:14px" href="#/solvedexams/${sj.id}">📝 اختبارات التمارين المحلولة</a>` : ''}`;
 }
-const pageSolved = id => pageFields(id, 'solved');
+function pageSolved(id) { return pageFields(id, 'solved'); }
 
 function lessonCount(n) {
   return n === 0 ? 'لا دروس' : n === 1 ? 'درس واحد' : n === 2 ? 'درسان' : n <= 10 ? n + ' دروس' : n + ' درساً';
