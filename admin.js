@@ -162,14 +162,18 @@ const ENT = {
     fields: [{ k: 'name', l: 'اسم المادة', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
   plans: { table: 'plans', single: 'اشتراك', parent: 'level_id', label: r => `${r.name} — ${money(r.price)} / ${durLabel(r.duration_days)}`,
     fields: [{ k: 'name', l: 'اسم الاشتراك (مثال: اشتراك شهري)', t: 'text' }, { k: 'price', l: 'السعر', t: 'number' }, { k: 'duration_days', l: 'المدة بالأيام (30 = شهر، 270 = سنة دراسية)', t: 'number' }] },
-  fields: { table: 'fields', single: 'مجال', parent: 'subject_id', label: r => r.name,
+  fields: { table: 'fields', single: 'مجال', parent: 'subject_id', label: r => (r.kind === 'solved' ? '✍️ ' : '') + r.name,
     fields: [{ k: 'name', l: 'اسم المجال (مثال: القرآن الكريم وتفسيره)', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
-  exams: { table: 'exams', single: 'اختبار', parent: 'subject_id', label: r => r.title,
+  exams: { table: 'exams', single: 'اختبار', parent: 'subject_id', label: r => (r.kind === 'solved' ? '✍️ ' : '') + r.title,
     fields: [{ k: 'title', l: 'عنوان الاختبار (مثال: اختبار الفصل الأول)', t: 'text' }, { k: 'description', l: 'وصف قصير (اختياري)', t: 'text', opt: true }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
+  contests: { table: 'contests', single: 'امتحان', parent: 'level_id', label: r => `${r.title} — ${r.duration_min} د${r.num_questions ? ' — ' + r.num_questions + ' سؤال' : ''}${r.partial ? ' — تنقيط جزئي' : ''}`,
+    fields: [{ k: 'title', l: 'عنوان الامتحان', t: 'text' }, { k: 'description', l: 'وصف قصير (اختياري)', t: 'text', opt: true },
+      { k: 'duration_min', l: 'مدة الامتحان بالدقائق', t: 'number' }, { k: 'num_questions', l: 'عدد الأسئلة (0 = كل الأسئلة المرفوعة، وإلا يُختار هذا العدد عشوائياً)', t: 'number' },
+      { k: 'partial', l: 'التنقيط (0 = السؤال كاملاً أو لا شيء، 1 = جزئي)', t: 'number' }, { k: 'sort', l: 'الترتيب', t: 'number' }] },
   lessons: { table: 'lessons', single: 'درس', parent: 'field_id', label: r => r.title,
     fields: [{ k: 'title', l: 'عنوان الدرس', t: 'text' }, { k: 'sort', l: 'الترتيب', t: 'number' }] }
 };
-const parentId = key => ({ levels: ADM.stage, subjects: ADM.level, plans: ADM.level, fields: ADM.subject, exams: ADM.subject, lessons: ADM.field }[key] || {}).id;
+const parentId = key => ({ levels: ADM.stage, contests: ADM.level, subjects: ADM.level, plans: ADM.level, fields: ADM.subject, exams: ADM.subject, lessons: ADM.field }[key] || {}).id;
 
 function entSection(key, title, rows, canOpen) {
   admCache[key] = Object.fromEntries(rows.map(r => [r.id, r]));
@@ -208,6 +212,8 @@ async function admContent(box) {
     const [subs, plans] = await Promise.all([get('subjects', 'level_id', A.level.id), get('plans', 'level_id', A.level.id)]);
     html += entSection('subjects', `مواد «${esc(A.level.name)}»`, subs, true);
     html += entSection('plans', 'أسعار الاشتراك لهذا المستوى', plans, false);
+    html += entSection('contests', 'الامتحانات (متعددة الإجابات بوقت محدد)', await get('contests', 'level_id', A.level.id), false);
+    html += `<button class="btn-light btn-block" data-act="contestimp" style="margin-top:8px">📦 استيراد امتحان كامل (أسئلة + مواد) بلصق واحد</button>`;
   } else if (!A.field) {
     const [fds, exs] = await Promise.all([get('fields', 'subject_id', A.subject.id), get('exams', 'subject_id', A.subject.id)]);
     html += entSection('fields', `مجالات «${esc(A.subject.name)}»`, fds, true);
@@ -235,6 +241,7 @@ async function admContentClick(e, box) {
   }
   if (act === 'packimp') return importPack(box);
   if (act === 'examimp') return importExam(box);
+  if (act === 'contestimp') return importContest(box);
   const row = id ? admCache[ent][id] : null;
   if (act === 'open') {
     const name = ENT[ent].label(row);
@@ -274,7 +281,7 @@ async function admContentClick(e, box) {
 function entityForm(key, row, box) {
   const E = ENT[key];
   const count = Object.keys(admCache[key] || {}).length;
-  const defs = { sort: count + 1, price: 0, duration_days: 30 };
+  const defs = { sort: count + 1, price: 0, duration_days: 30, duration_min: 90, num_questions: 0, partial: 0 };
   const m = openModal(`<h2 style="margin-top:0">${row ? 'تعديل' : 'إضافة'} ${E.single}</h2>
     <form id="ef">${E.fields.map(f => `<label>${f.l}</label>
       <input type="${f.t}" id="f_${f.k}" ${f.t === 'number' ? 'step="any"' : ''} value="${esc(row ? row[f.k] : (defs[f.k] ?? ''))}" ${f.opt ? '' : 'required'}>`).join('')}
@@ -342,6 +349,7 @@ function parseExams(text) {
 async function importExam(box) {
   const m = openModal(`<h2 style="margin-top:0">استيراد اختبار كامل</h2>
     <div class="small muted">الصق الاختبار كما أرسلته لك. سيُنشأ داخل المادة «${esc(ADM.subject.name)}» بعنوانه وأسئلته وإجاباته.</div>
+<select id="kind_sel" style="margin:8px 0"><option value="normal">القسم: الاختبارات العادية</option><option value="solved">القسم: اختبارات التمارين المحلولة</option></select>
     <textarea id="ie_t" style="min-height:220px;margin-top:8px" placeholder="@@ اختبار: عنوان الاختبار&#10;وصف: (اختياري)&#10;1. السؤال؟&#10;أ) ...&#10;ب) ...&#10;الإجابة: ب"></textarea>
     <div id="ie_info" class="small muted" style="margin:6px 0"></div>
     <button class="btn-block" id="ie_go">إنشاء الاختبار</button>`);
@@ -355,10 +363,11 @@ async function importExam(box) {
     if (!p.length) return toast('لم أتعرف على أي اختبار. تأكد أنك لصقت النص كاملًا من أول سطر «@@ اختبار:»');
     const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'جارٍ الإنشاء…';
     try {
+      const kind = $('#kind_sel', m).value;
       const existing = await q(sb.from('exams').select('id').eq('subject_id', ADM.subject.id));
       let n = existing.length;
       for (const ex of p) {
-        const er = await sb.from('exams').insert({ subject_id: ADM.subject.id, title: ex.title, description: ex.description, sort: ++n }).select().single();
+        const er = await sb.from('exams').insert({ subject_id: ADM.subject.id, title: ex.title, description: ex.description, kind, sort: ++n }).select().single();
         if (er.error) throw er.error;
         const qr = await sb.from('exam_questions').insert(ex.questions.map((z, k) => ({
           exam_id: er.data.id, question: z.question, options: z.options, correct_index: z.correct, sort: k + 1 })));
@@ -375,6 +384,7 @@ async function importExam(box) {
 async function importPack(box) {
   const m = openModal(`<h2 style="margin-top:0">استيراد مجال كامل</h2>
     <div class="small muted">الصق النص الكامل الذي أرسلته لك. سيُنشأ المجال بدروسه وأسئلته دفعة واحدة داخل المادة «${esc(ADM.subject.name)}».</div>
+<select id="kind_sel" style="margin:8px 0"><option value="lessons">القسم: المجالات (دروس وملخصات)</option><option value="solved">القسم: تمارين محلولة</option></select>
     <textarea id="pk_t" style="min-height:220px;margin-top:8px" placeholder="@@ المجال: اسم المجال&#10;=== الدرس: عنوان&#10;الملخص...&#10;--- الأسئلة&#10;1. السؤال؟&#10;أ) ...&#10;الإجابة: أ"></textarea>
     <div id="pk_info" class="small muted" style="margin:6px 0"></div>
     <button class="btn-block" id="pk_go">إنشاء المجال</button>`);
@@ -389,13 +399,22 @@ async function importPack(box) {
     if (!p.length) return toast('لم أتعرف على أي درس. تأكد أنك لصقت النص كاملًا من أوله');
     const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'جارٍ الإنشاء…';
     try {
-      const existing = await q(sb.from('fields').select('id').eq('subject_id', ADM.subject.id));
+      const kind = $('#kind_sel', m).value;
+      const existing = (await q(sb.from('fields').select('id,name,kind').eq('subject_id', ADM.subject.id))).filter(x => (x.kind || 'lessons') === kind || true);
       let n = existing.length;
       for (const fd of p) {
-        const fr = await sb.from('fields').insert({ subject_id: ADM.subject.id, name: fd.name, sort: ++n }).select().single();
-        if (fr.error) throw fr.error;
+        // إن وُجد مجال بالاسم نفسه تُضاف الدروس إليه (لاستيراد المجال الكبير على دفعتين)
+        let fieldId = existing.find(x => x.name.trim() === fd.name.trim() && (x.kind || 'lessons') === kind)?.id, base = 0;
+        if (fieldId) {
+          const old = await q(sb.from('lessons').select('sort').eq('field_id', fieldId).order('sort', { ascending: false }).limit(1));
+          base = old[0]?.sort || 0;
+        } else {
+          const fr = await sb.from('fields').insert({ subject_id: ADM.subject.id, name: fd.name, kind, sort: ++n }).select().single();
+          if (fr.error) throw fr.error;
+          fieldId = fr.data.id; existing.push({ id: fieldId, name: fd.name, kind });
+        }
         const lr = await sb.from('lessons').insert(fd.lessons.map((x, i) => ({
-          subject_id: ADM.subject.id, field_id: fr.data.id, title: x.title, summary: x.summary, sort: i + 1 }))).select();
+          subject_id: ADM.subject.id, field_id: fieldId, title: x.title, summary: x.summary, sort: base + i + 1 }))).select();
         if (lr.error) throw lr.error;
         const byTitle = [...lr.data].sort((x, y) => x.sort - y.sort);
         const qs = [];
@@ -803,4 +822,76 @@ async function admStats(box) {
     <h2>أكثر الدروس اختباراً</h2>
     ${top.length ? `<div class="list">${top.map(([t, n]) => `<div class="row"><span class="grow">${esc(t)}</span><span class="badge b-green">${n} محاولة</span></div>`).join('')}</div>`
       : '<div class="muted">لا توجد محاولات بعد.</div>'}`;
+}
+
+
+/* ---------- استيراد امتحان كامل (أسئلة متعددة الإجابات) ----------
+@@ امتحان: العنوان
+مدة: 90            (بالدقائق)
+عدد: 0             (0 = كل الأسئلة، وإلا يُختار هذا العدد عشوائياً)
+تنقيط: كلي أو جزئي
+المادة: الرياضيات   (كل الأسئلة بعدها تتبع هذه المادة حتى سطر «المادة:» التالي)
+1. السؤال؟
+أ) ... ب) ... ج) ... د) ... هـ) ...
+الإجابة: أ ج هـ    (يمكن أن تكون 1 إلى 5 إجابات صحيحة)                                   */
+function parseContests(text) {
+  const out = []; let c = null, cur = null, subj = '';
+  const L = { 'ا': 0, 'أ': 0, 'إ': 0, 'آ': 0, 'ب': 1, 'ج': 2, 'د': 3, 'ه': 4, 'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4 };
+  const push = () => { if (cur && cur.question.trim() && cur.options.length >= 2) c.questions.push({ ...cur, question: cur.question.trim(), correct: cur.correct.length ? cur.correct : [0] }); cur = null; };
+  const OPT = /^\s*[(\[]?([ابجدهأإآ]|[A-Ea-e])ـ?[)\]]?\s*[\)\.\-:،]\s*(.+)$/;
+  const ANS = /^\s*(?:الإجابات|الاجابات|الإجابة|الاجابة|الجواب|answers?|ans)\s*(?:الصحيحة)?\s*[:：\-]?\s*(.+)$/i;
+  const QST = /^\s*(?:(?:السؤال|س)\s*)?(\d+|[١-٩][٠-٩]*)\s*[\.\)\-:：]\s*(.+)$/;
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.replace(/[*#]+/g, '').trim(); let m;
+    if (!line) continue;
+    if ((m = line.match(/^@@\s*(?:الامتحان|امتحان)?\s*[:：]?\s*(.+)$/))) { push(); c = { title: m[1].trim(), duration: 90, num: 0, partial: 0, desc: '', questions: [] }; out.push(c); subj = ''; continue; }
+    if (!c) continue;
+    if (!cur && (m = line.match(/^(?:مدة|المدة)\s*[:：]\s*(\d+)/))) { c.duration = +m[1]; continue; }
+    if (!cur && (m = line.match(/^(?:عدد|العدد|عدد الأسئلة)\s*[:：]\s*(\d+)/))) { c.num = +m[1]; continue; }
+    if (!cur && (m = line.match(/^(?:تنقيط|التنقيط)\s*[:：]\s*(.+)$/))) { c.partial = /جزئ/.test(m[1]) ? 1 : 0; continue; }
+    if (!cur && (m = line.match(/^(?:وصف|الوصف)\s*[:：]\s*(.*)$/))) { c.desc = m[1].trim(); continue; }
+    if ((m = line.match(/^(?:المادة|مادة)\s*[:：]\s*(.+)$/))) { push(); subj = m[1].trim(); continue; }
+    if ((m = line.match(ANS)) && cur) {
+      const set = new Set(); for (const ch of m[1].replace(/هـ/g, 'ه').toUpperCase().replace(/[ءه]/g, x => x)) if (ch in L) set.add(L[ch]);
+      cur.correct = [...set].filter(i => i < cur.options.length).sort((a, b) => a - b); continue;
+    }
+    if ((m = line.match(QST))) { push(); cur = { subject: subj, question: m[2], options: [], correct: [] }; continue; }
+    if ((m = line.match(OPT)) && cur) { cur.options.push(m[2].trim()); continue; }
+    if (cur) { if (cur.options.length) cur.options[cur.options.length - 1] += ' ' + line; else cur.question += ' ' + line; }
+  }
+  push();
+  return out.filter(x => x.questions.length);
+}
+
+async function importContest(box) {
+  const m = openModal(`<h2 style="margin-top:0">استيراد امتحان كامل</h2>
+    <div class="small muted">الصق الامتحان كما أرسلته لك. سيُنشأ داخل المستوى «${esc(ADM.level.name)}» (المدة وعدد الأسئلة تعدّلهما لاحقاً من زر «تعديل»).</div>
+    <textarea id="ic_t" style="min-height:220px;margin-top:8px" placeholder="@@ امتحان: العنوان&#10;مدة: 90&#10;المادة: الرياضيات&#10;1. السؤال؟&#10;أ) ...&#10;ب) ...&#10;ج) ...&#10;د) ...&#10;هـ) ...&#10;الإجابة: أ ج"></textarea>
+    <div id="ic_info" class="small muted" style="margin:6px 0"></div>
+    <button class="btn-block" id="ic_go">إنشاء الامتحان</button>`);
+  const t = $('#ic_t', m), info = $('#ic_info', m);
+  t.addEventListener('input', () => {
+    const p = parseContests(t.value);
+    info.textContent = p.length ? `تم التعرف على ${p.length} امتحان، ${p.reduce((a, x) => a + x.questions.length, 0)} سؤال` : '';
+  });
+  $('#ic_go', m).onclick = async ev => {
+    const p = parseContests(t.value);
+    if (!p.length) return toast('لم أتعرف على أي امتحان. تأكد أنك لصقت النص من أول سطر «@@ امتحان:»');
+    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'جارٍ الإنشاء…';
+    try {
+      const existing = await q(sb.from('contests').select('id').eq('level_id', ADM.level.id));
+      let n = existing.length;
+      for (const c of p) {
+        const er = await sb.from('contests').insert({ level_id: ADM.level.id, title: c.title, description: c.desc, duration_min: c.duration, num_questions: c.num, partial: c.partial, sort: ++n }).select().single();
+        if (er.error) throw er.error;
+        const qr = await sb.from('contest_questions').insert(c.questions.map((z, k) => ({
+          contest_id: er.data.id, subject: z.subject, question: z.question, options: z.options, correct: z.correct, sort: k + 1 })));
+        if (qr.error) throw qr.error;
+      }
+      closeModal(); toast('تم إنشاء الامتحان ✔'); admContent(box);
+    } catch (err) {
+      toast('تعذّر الإنشاء: ' + (err.message || err));
+      btn.disabled = false; btn.textContent = 'إنشاء الامتحان';
+    }
+  };
 }

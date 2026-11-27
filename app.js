@@ -126,7 +126,7 @@ document.addEventListener('keyup', e => {
 
 /* ---------- المسارات ---------- */
 const routes = {
-  '': pageWelcome, stage: pageStage, level: pageLevel, subject: pageSubject, fields: pageFields, field: pageField, exams: pageExams, exam: pageExam,
+  '': pageWelcome, stage: pageStage, level: pageLevel, subject: pageSubject, fields: pageFields, field: pageField, exams: pageExams, exam: pageExam, solved: pageSolved, solvedexams: pageSolvedExams, contest: pageContest,
   lesson: pageLesson, quiz: pageQuiz, me: pageMe, login: pageAuth,
   admin: (...a) => window.pageAdmin(...a)
 };
@@ -136,7 +136,7 @@ async function route() {
   if (S.recovery) return pageRecovery();
   const parts = hash.replace(/^\//, '').split('/');
   const name = parts[0] || '';
-  setProtected(name === 'lesson' || name === 'quiz' || name === 'exam');
+  setProtected(name === 'lesson' || name === 'quiz' || name === 'exam' || name === 'contest');
   window.scrollTo(0, 0);
   $app.innerHTML = '<div class="center muted">جارٍ التحميل…</div>';
   try { await (routes[name] || pageWelcome)(...parts.slice(1)); }
@@ -214,12 +214,22 @@ async function pageLevel(id) {
 
   if (sub || isAdmin()) {
     const subjects = (await q(sb.from('subjects').select('*').eq('level_id', id).order('sort').order('name'))).filter(s => !s.hidden);
+    const contests = (await q(sb.from('contests').select('*').eq('level_id', id).order('sort').order('created_at'))).filter(c => !c.hidden);
+    let cbest = {};
+    if (contests.length && S.user) {
+      (await q(sb.from('contest_results').select('contest_id,score_pct').eq('user_id', S.user.id).in('contest_id', contests.map(c => c.id))))
+        .forEach(r => { cbest[r.contest_id] = Math.max(cbest[r.contest_id] ?? 0, r.score_pct); });
+    }
     $app.innerHTML = `${crumbs}<h1>${esc(level.name)}</h1>
       ${sub ? `<div class="notice n-ok">اشتراكك ساري حتى <b>${fmtDate(sub.ends_at)}</b></div>` : '<div class="notice n-info">عرض المدير</div>'}
       <h2>المواد</h2>
       ${subjects.length
         ? `<div class="grid">${subjects.map(s => `<a class="card tile" href="#/subject/${s.id}"><span class="ico">${subjIcon(s.name)}</span>${esc(s.name)}</a>`).join('')}</div>`
-        : '<div class="notice n-info">لا توجد مواد بعد.</div>'}`;
+        : '<div class="notice n-info">لا توجد مواد بعد.</div>'}
+      ${contests.length ? `<h2>🏆 الامتحانات</h2><div class="list">${contests.map(c => `
+        <a class="row" href="#/contest/${c.id}"><span class="num">⏱</span>
+        <span class="grow">${esc(c.title)}<br><small class="muted">${c.duration_min} دقيقة${c.num_questions ? ' · ' + c.num_questions + ' سؤالاً' : ''}${c.description ? ' · ' + esc(c.description) : ''}</small></span>
+        ${cbest[c.id] != null ? `<span class="badge b-green">${cbest[c.id]}%</span>` : ''}</a>`).join('')}</div>` : ''}`;
     return;
   }
 
@@ -280,7 +290,7 @@ async function pageLevel(id) {
     if (!file) return toast('ارفع صورة الإيصال');
     const btn = e.submitter; btn.disabled = true; btn.textContent = 'جارٍ الإرسال…';
     try {
-      const blob = await compress(file, 1400, 'image/jpeg', 0.82);
+      const blob = await compress(file, 900, 'image/jpeg', 0.55);
       const path = `${S.user.id}/${Date.now()}.${extOf(blob)}`;
       const up = await sb.storage.from('receipts').upload(path, blob, { contentType: blob.type });
       if (up.error) throw up.error;
@@ -324,15 +334,17 @@ async function pageSubject(id) {
     <h1>${subjIcon(sj.name)} ${esc(sj.name)}</h1>
     <div class="list">
       <a class="row" href="#/fields/${sj.id}"><span class="num">📂</span><span class="grow"><b>المجالات</b><br><small class="muted">الدروس والملخصات</small></span></a>
+      <a class="row" href="#/solved/${sj.id}"><span class="num">✍️</span><span class="grow"><b>تمارين محلولة</b><br><small class="muted">تمارين بحلولها ثم اختبارات عليها</small></span></a>
       <a class="row" href="#/exams/${sj.id}"><span class="num">📝</span><span class="grow"><b>الاختبارات</b><br><small class="muted">اختبارات QCM لقياس مستواك</small></span></a>
     </div>`;
 }
 
-async function pageFields(id) {
+async function pageFields(id, kind = 'lessons') {
+  const solved = kind === 'solved';
   const sj = await q(sb.from('subjects').select('*, levels(id,name)').eq('id', id).single());
   const [fields, loose] = await Promise.all([
-    q(sb.from('fields').select('id,name,hidden,sort').eq('subject_id', id).order('sort').order('name')),
-    q(sb.from('lessons').select('id,title,hidden,sort').eq('subject_id', id).is('field_id', null).order('sort').order('created_at'))
+    q(sb.from('fields').select('id,name,hidden,sort').eq('subject_id', id).eq('kind', kind).order('sort').order('name')),
+    q(solved ? Promise.resolve({ data: [] }) : sb.from('lessons').select('id,title,hidden,sort').eq('subject_id', id).is('field_id', null).order('sort').order('created_at'))
   ]);
   const vf = fields.filter(f => !f.hidden);
   const vl = loose.filter(l => !l.hidden);
@@ -343,14 +355,16 @@ async function pageFields(id) {
     ls.filter(l => !l.hidden).forEach(l => { counts[l.field_id] = (counts[l.field_id] || 0) + 1; });
   }
   $app.innerHTML = `
-    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › <a href="#/subject/${sj.id}">${esc(sj.name)}</a> › المجالات</div>
+    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › <a href="#/subject/${sj.id}">${esc(sj.name)}</a> › ${solved ? 'تمارين محلولة' : 'المجالات'}</div>
     <h1>${subjIcon(sj.name)} ${esc(sj.name)}</h1>
     ${vf.length ? `<h2>اختر المجال</h2><div class="list">${vf.map(f => `
       <a class="row" href="#/field/${f.id}"><span class="num">${fieldIcon}</span><span class="grow">${esc(f.name)}</span>
       <span class="badge b-gray">${lessonCount(counts[f.id] || 0)}</span></a>`).join('')}</div>` : ''}
     ${vl.length ? `<h2>دروس أخرى</h2>${lessonRows(vl, {})}` : ''}
-    ${!vf.length && !vl.length ? '<div class="notice n-info">لا توجد مجالات في هذه المادة بعد.</div>' : ''}`;
+    ${!vf.length && !vl.length ? '<div class="notice n-info">لا توجد مجالات في هذه المادة بعد.</div>' : ''}
+    ${solved ? `<a class="btn btn-block" style="margin-top:14px" href="#/solvedexams/${sj.id}">📝 اختبارات التمارين المحلولة</a>` : ''}`;
 }
+const pageSolved = id => pageFields(id, 'solved');
 
 function lessonCount(n) {
   return n === 0 ? 'لا دروس' : n === 1 ? 'درس واحد' : n === 2 ? 'درسان' : n <= 10 ? n + ' دروس' : n + ' درساً';
@@ -372,10 +386,10 @@ async function pageField(id) {
   }
   const sj = fd.subjects;
   $app.innerHTML = `
-    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › <a href="#/subject/${sj.id}">${esc(sj.name)}</a> › <a href="#/fields/${sj.id}">المجالات</a> › ${esc(fd.name)}</div>
+    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › <a href="#/subject/${sj.id}">${esc(sj.name)}</a> › <a href="#/${fd.kind === 'solved' ? 'solved' : 'fields'}/${sj.id}">${fd.kind === 'solved' ? 'تمارين محلولة' : 'المجالات'}</a> › ${esc(fd.name)}</div>
     <h1>${fieldIcon} ${esc(fd.name)}</h1>
     ${lessons.length ? lessonRows(lessons, best) : '<div class="notice n-info">لا توجد دروس في هذا المجال بعد.</div>'}
-    <a class="btn btn-line btn-block" style="margin-top:14px" href="#/fields/${sj.id}">الرجوع إلى المجالات</a>`;
+    <a class="btn btn-line btn-block" style="margin-top:14px" href="#/${fd.kind === 'solved' ? 'solved' : 'fields'}/${sj.id}">الرجوع</a>`;
 }
 
 /* ---------- رسومات هندسية مدمجة: سطر [[شكل: المفتاح | تعليق اختياري]] داخل الملخص ---------- */
@@ -498,29 +512,104 @@ async function pageLesson(id) {
 }
 
 /* ---------- اختبارات المادة ---------- */
-async function pageExams(id) {
+async function pageSolvedExams(id) { return pageExams(id, 'solved'); }
+async function pageExams(id, kind = 'normal') {
   const sj = await q(sb.from('subjects').select('*, levels(id,name)').eq('id', id).single());
-  const exams = (await q(sb.from('exams').select('id,title,description,hidden,sort').eq('subject_id', id).order('sort').order('created_at'))).filter(e => !e.hidden);
+  const exams = (await q(sb.from('exams').select('id,title,description,hidden,sort').eq('subject_id', id).eq('kind', kind).order('sort').order('created_at'))).filter(e => !e.hidden);
   let best = {};
   if (exams.length && S.user) {
     const rs = await q(sb.from('exam_results').select('exam_id,score_pct').eq('user_id', S.user.id).in('exam_id', exams.map(e => e.id)));
     rs.forEach(r => { best[r.exam_id] = Math.max(best[r.exam_id] ?? 0, r.score_pct); });
   }
   $app.innerHTML = `
-    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › <a href="#/subject/${sj.id}">${esc(sj.name)}</a> › الاختبارات</div>
-    <h1>📝 اختبارات ${esc(sj.name)}</h1>
+    <div class="crumbs"><a href="#/">الرئيسية</a> › <a href="#/level/${sj.levels.id}">${esc(sj.levels.name)}</a> › <a href="#/subject/${sj.id}">${esc(sj.name)}</a> › ${kind === 'solved' ? `<a href="#/solved/${sj.id}">تمارين محلولة</a> › اختبارات التمارين` : 'الاختبارات'}</div>
+    <h1>📝 ${kind === 'solved' ? 'اختبارات التمارين المحلولة' : 'اختبارات'} ${esc(sj.name)}</h1>
     ${exams.length ? `<div class="list">${exams.map((e, i) => `
       <a class="row" href="#/exam/${e.id}"><span class="num">${i + 1}</span>
       <span class="grow">${esc(e.title)}${e.description ? `<br><small class="muted">${esc(e.description)}</small>` : ''}</span>
       ${best[e.id] != null ? `<span class="badge b-green">${best[e.id]}%</span>` : ''}</a>`).join('')}</div>`
       : '<div class="notice n-info">لا توجد اختبارات في هذه المادة بعد.</div>'}
-    <a class="btn btn-line btn-block" style="margin-top:14px" href="#/subject/${sj.id}">الرجوع</a>`;
+    <a class="btn btn-line btn-block" style="margin-top:14px" href="#/${kind === 'solved' ? 'solved' : 'subject'}/${sj.id}">الرجوع</a>`;
 }
 
 async function pageExam(id) {
-  const ex = await q(sb.from('exams').select('id,title,subject_id').eq('id', id).single());
+  const ex = await q(sb.from('exams').select('id,title,subject_id,kind').eq('id', id).single());
   return runQuiz({ id, title: ex.title, get: 'get_exam', submit: 'submit_exam', arg: 'p_exam',
-    back: `#/exams/${ex.subject_id}`, backText: 'العودة للاختبارات', self: `#/exam/${id}`, head: 'اختبار: ', empty: 'لا توجد أسئلة في هذا الاختبار بعد.' });
+    back: `#/${ex.kind === 'solved' ? 'solvedexams' : 'exams'}/${ex.subject_id}`, backText: 'العودة للاختبارات', self: `#/exam/${id}`, head: 'اختبار: ', empty: 'لا توجد أسئلة في هذا الاختبار بعد.' });
+}
+
+/* ---------- الامتحانات: خمسة خيارات، قد تكون 1 إلى 5 منها صحيحة، بمؤقت ---------- */
+let contestTimer = null;
+async function pageContest(id) {
+  const c = await q(sb.from('contests').select('*').eq('id', id).single());
+  const back = `#/level/${c.level_id}`;
+  $app.innerHTML = `<div class="crumbs"><a href="${back}">← العودة للمستوى</a></div>
+    <h1>🏆 ${esc(c.title)}</h1>
+    <div class="card">${c.description ? esc(c.description) + '<br>' : ''}
+      ⏱ المدة: <b>${c.duration_min} دقيقة</b>${c.num_questions ? `<br>عدد الأسئلة: <b>${c.num_questions}</b>` : ''}<br>
+      لكل سؤال خمسة خيارات، وقد يكون صحيحاً منها خيار واحد أو أكثر (حتى الخمسة).<br>
+      ${c.partial ? 'التنقيط جزئي: كل خيار صحيح يحسب، وكل خيار خاطئ يُنقص.' : 'يُحتسب السؤال إذا اخترتَ كل الخيارات الصحيحة ولا شيء غيرها.'}<br>
+      عند انتهاء الوقت يُرسَل الامتحان تلقائياً.</div>
+    <button class="btn-block" id="cstart" style="margin-top:12px">ابدأ الامتحان</button>`;
+  $('#cstart').onclick = () => startContest(c, back);
+}
+async function startContest(c, back) {
+  const { data: qs, error } = await sb.rpc('get_contest', { p_contest: c.id });
+  if (error) return toast('تعذّر التحميل: ' + error.message);
+  if (!qs.length) { $app.innerHTML = `<div class="notice n-info">لا توجد أسئلة في هذا الامتحان بعد.</div><a class="btn btn-light" href="${back}">رجوع</a>`; return; }
+  const opts = o => (Array.isArray(o) ? o : []);
+  let lastSubj = null;
+  $app.innerHTML = `
+    <div id="ctimer" style="position:sticky;top:0;z-index:5;background:var(--green-d,#1f6b4a);color:#fff;padding:8px 12px;border-radius:10px;text-align:center;font-weight:800;font-size:20px;margin-bottom:10px"></div>
+    <h1>${esc(c.title)}</h1>
+    <form id="quiz">
+      ${qs.map((x, i) => { const hd = x.subject && x.subject !== lastSubj ? `<h2>${esc(x.subject)}</h2>` : ''; lastSubj = x.subject;
+        return hd + `<div class="q"><div class="qt">${i + 1}. ${richQ(x.question)}</div>
+          ${opts(x.options).map((o, j) => `<label class="opt"><input type="checkbox" name="q${i}" value="${j}"><span>${rich(o)}</span></label>`).join('')}</div>`; }).join('')}
+      <button class="btn-block" type="submit">إنهاء الامتحان</button>
+    </form>`;
+  let done = false, end = Date.now() + c.duration_min * 60000;
+  const tick = () => {
+    const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+    const el = $('#ctimer'); if (!el) { clearInterval(contestTimer); return; }
+    el.textContent = '⏱ ' + String(Math.floor(left / 60)).padStart(2, '0') + ':' + String(left % 60).padStart(2, '0');
+    if (left <= 60) el.style.background = '#b3261e';
+    if (left === 0) { clearInterval(contestTimer); submit(true); }
+  };
+  clearInterval(contestTimer); contestTimer = setInterval(tick, 1000); tick();
+  const submit = async auto => {
+    if (done) return;
+    if (!auto && !confirm('هل تريد إنهاء الامتحان وإرسال إجاباتك؟')) return;
+    done = true; clearInterval(contestTimer);
+    const answers = {};
+    qs.forEach((x, i) => { answers[x.id] = [...document.querySelectorAll(`input[name=q${i}]:checked`)].map(v => Number(v.value)); });
+    const { data, error } = await sb.rpc('submit_contest', { p_contest: c.id, p_ids: qs.map(x => x.id), p_answers: answers });
+    if (error) { done = false; toast('تعذّر التصحيح: ' + error.message); return; }
+    showContestResult(c, qs, data, opts, back, auto);
+  };
+  $('#quiz').addEventListener('submit', e => { e.preventDefault(); submit(false); });
+}
+function showContestResult(c, qs, res, opts, back, auto) {
+  const [label, cls] = levelLabel(res.score_pct);
+  const det = Object.fromEntries(res.details.map(d => [d.id, d]));
+  const on20 = Math.round(res.score_pct / 5 * 100) / 100;
+  window.scrollTo(0, 0);
+  $app.innerHTML = `
+    <h1>نتيجة: ${esc(c.title)}</h1>
+    ${auto ? '<div class="notice n-info">انتهى الوقت فأُرسل الامتحان تلقائياً.</div>' : ''}
+    <div class="score ${cls}"><div class="pct">${res.score_pct}%</div>
+      <div style="font-size:22px;font-weight:800">المستوى: ${label}</div>
+      <div>العلامة: ${on20} / 20</div>
+      <div>${res.correct} سؤالاً كاملاً من ${res.total}</div>
+      <div class="bar"><i style="width:${res.score_pct}%"></i></div></div>
+    <a class="btn btn-block" href="#/contest/${c.id}" onclick="route()">إعادة الامتحان</a>
+    <a class="btn btn-line btn-block" style="margin-top:10px" href="${back}">العودة للمستوى</a>
+    <h2>مراجعة الإجابات</h2>
+    ${qs.map((x, i) => { const d = det[x.id] || { chosen: [], correct: [] };
+      return `<div class="q"><div class="qt">${i + 1}. ${richQ(x.question)}</div>
+        ${opts(x.options).map((o, j) => { const ok = d.correct.includes(j), ch = d.chosen.includes(j);
+          const k = ok ? 'ok' : (ch ? 'no' : '');
+          return `<div class="opt ${k}">${ok ? '✔' : ch ? '✘' : '○'} <span>${rich(o)}</span>${ok && !ch ? ' <small>(صحيح لم تختره)</small>' : ''}</div>`; }).join('')}</div>`; }).join('')}`;
 }
 
 /* ---------- الاختبار QCM ---------- */
